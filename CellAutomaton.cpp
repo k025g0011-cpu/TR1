@@ -34,9 +34,9 @@ void CellAutomaton::Initialize(KamataEngine::Model* model, KamataEngine::Camera*
 	// 各建物タイプ用のテクスチャを読み込む
 
 	textureHandles_[CellType::ROAD] = KamataEngine::TextureManager::Load("gray1x1.png");
-	textureHandles_[CellType::RESIDENTIAL] = KamataEngine::TextureManager::Load("white1x1.png");
-	textureHandles_[CellType::COMMERCIAL] = KamataEngine::TextureManager::Load("white1x1.png");
-	textureHandles_[CellType::INDUSTRIAL] = KamataEngine::TextureManager::Load("white1x1.png");
+	textureHandles_[CellType::RESIDENTIAL] = KamataEngine::TextureManager::Load("gide1x1.png");
+	textureHandles_[CellType::COMMERCIAL] = KamataEngine::TextureManager::Load("blue1x1.png");
+	textureHandles_[CellType::INDUSTRIAL] = KamataEngine::TextureManager::Load("black1x1.png");
 	textureHandles_[CellType::PARK] = KamataEngine::TextureManager::Load("green1x1.png");
 }
 
