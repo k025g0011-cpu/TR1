@@ -1,0 +1,21 @@
+{
+    "Player": {
+        "Acceleration": 0.20000000298023224,
+        "AttackChargeDuration": 15,
+        "AttackDashDuration": 5,
+        "AttackLeaveDuration": 10,
+        "Attenuation": 0.20000000298023224,
+        "AttenuationLanding": 0.10000000149011612,
+        "AttenuationWall": 0.10000000149011612,
+        "Blank": 0.0010000000474974513,
+        "GravityAcceleration": 0.03999999910593033,
+        "Height": 0.800000011920929,
+        "JumpAcceleration": 0.625,
+        "LimitFallSpeed": 10.0,
+        "LimitRunSpeed": 0.20000000298023224,
+        "RecoilDurationKnockback": 10,
+        "RecoilDurationRecovery": 20,
+        "TimeTurn": 0.30000001192092896,
+        "Width": 0.800000011920929
+    }
+}
