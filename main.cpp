@@ -18,7 +18,7 @@ using namespace KamataEngine;
 int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 	
 	//タイトルバー変更
-	KamataEngine::Initialize(L"LC1B_12_グンジ_ソラ_AL2");
+	KamataEngine::Initialize(L"LE2B_10_グンジ_ソラ_TR");
 
 	// DirectXCommonインスタンスの取得
 	DirectXCommon* dxCommon = DirectXCommon::GetInstance();
