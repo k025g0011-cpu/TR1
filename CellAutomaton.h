@@ -27,18 +27,20 @@ struct BuildingCost {
 };
 
 // 各CellTypeの建設費・維持費
-inline BuildingCost GetBuildingCost(CellType type) {
+// 各CellTypeの建設費・維持費（levelが上がるほど維持費も増える）
+inline BuildingCost GetBuildingCost(CellType type, int level = 0) {
+	float levelMultiplier = 1.0f + level * 0.8f; // レベル0=1倍、1=1.8倍、2=2.6倍、3=3.4倍
 	switch (type) {
 	case CellType::ROAD:
-		return {100.0f, 1.0f}; // 維持費を下げる
+		return {100.0f, 1.0f * levelMultiplier};
 	case CellType::RESIDENTIAL:
-		return {300.0f, 2.0f};
+		return {300.0f, 2.0f * levelMultiplier};
 	case CellType::COMMERCIAL:
-		return {500.0f, 4.0f};
+		return {500.0f, 4.0f * levelMultiplier};
 	case CellType::INDUSTRIAL:
-		return {400.0f, 3.0f};
+		return {400.0f, 3.0f * levelMultiplier};
 	case CellType::PARK:
-		return {200.0f, 2.0f};
+		return {200.0f, 2.0f * levelMultiplier};
 	default:
 		return {0.0f, 0.0f};
 	}

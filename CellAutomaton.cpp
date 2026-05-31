@@ -76,7 +76,7 @@ void CellAutomaton::SimulateResidential(int x, int z) {
 	// 道路なし → 人口を徐々に0へ
 	if (!IsAdjacentToRoad(x, z)) {
 		cell.population = std::max(0, cell.population - 5);
-		cell.income = cell.population * 0.20f;
+		cell.income = cell.population * 0.05f;
 		return;
 	}
 
@@ -93,7 +93,7 @@ void CellAutomaton::SimulateResidential(int x, int z) {
 	else if (cell.population > targetPop)
 		cell.population = std::max(targetPop, cell.population - 10);
 
-	cell.income = cell.population * 0.20f;
+	cell.income = cell.population * 0.05f;
 }
 
 // 商業施設の収入を更新
@@ -102,7 +102,7 @@ void CellAutomaton::SimulateCommercial(int x, int z) {
 
 	if (!IsAdjacentToRoad(x, z)) {
 		cell.population = std::max(0, cell.population - 3);
-		cell.income = cell.population * 0.40f;
+		cell.income = cell.population * 0.15f;
 		return;
 	}
 
@@ -115,7 +115,7 @@ void CellAutomaton::SimulateCommercial(int x, int z) {
 	else if (cell.population > targetWorkers)
 		cell.population = std::max(targetWorkers, cell.population - 5);
 
-	cell.income = cell.population * 0.40f;
+	cell.income = cell.population * 0.15f;
 }
 
 // 工業施設の収入を更新
@@ -124,7 +124,7 @@ void CellAutomaton::SimulateIndustrial(int x, int z) {
 
 	if (!IsAdjacentToRoad(x, z)) {
 		cell.population = std::max(0, cell.population - 3);
-		cell.income = cell.population * 0.30f;
+		cell.income = cell.population * 0.10f;
 		return;
 	}
 
@@ -137,7 +137,7 @@ void CellAutomaton::SimulateIndustrial(int x, int z) {
 	else if (cell.population > targetWorkers)
 		cell.population = std::max(targetWorkers, cell.population - 5);
 
-	cell.income = cell.population * 0.30f;
+	cell.income = cell.population * 0.10f;
 }
 
 // 全セルのシミュレーションを1ステップ実行
@@ -184,9 +184,11 @@ float CellAutomaton::GetTotalIncome() const {
 float CellAutomaton::GetTotalMaintenance() const {
 	float total = 0.0f;
 	for (int x = 0; x < GRID_SIZE; ++x)
-		for (int z = 0; z < GRID_SIZE; ++z)
-			if (grid_[x][z].type != CellType::EMPTY)
-				total += GetBuildingCost(grid_[x][z].type).maintenanceCost;
+		for (int z = 0; z < GRID_SIZE; ++z) {
+			const Cell& cell = grid_[x][z];
+			if (cell.type != CellType::EMPTY)
+				total += GetBuildingCost(cell.type, cell.level).maintenanceCost;
+		}
 	return total;
 }
 

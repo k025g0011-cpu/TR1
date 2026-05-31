@@ -176,7 +176,7 @@ void GameScene::Update() {
 		ImGui::TextColored(typeColors[static_cast<int>(cell->type)], "Cell: %s  Lv.%d", typeNames[static_cast<int>(cell->type)], cell->level);
 		ImGui::Text("Population: %d", cell->population);
 		ImGui::Text("Income:     $%.1f", cell->income);
-		ImGui::Text("Maint:     -$%.1f", GetBuildingCost(cell->type).maintenanceCost);
+		ImGui::Text("Maint:     -$%.1f", GetBuildingCost(cell->type, cell->level).maintenanceCost);
 
 		// 道路接続状態
 		const int dx[] = {0, 0, 1, -1}, dz[] = {1, -1, 0, 0};
