@@ -8,78 +8,45 @@ static CellType currentPlacingType = CellType::ROAD;
 
 GameScene::~GameScene() {
 	delete cellModel_;
-	delete cursorModel_;
 	delete cellAutomaton_;
 	delete debugCamera_;
 }
 
 void GameScene::Initialize() {
-	cellTextureHandle_ = TextureManager::Load("white1x1.png");
 	cellModel_ = Model::Create();
-	cursorModel_ = Model::Create();
-
 	input_ = Input::GetInstance();
 
 	camera_.Initialize();
 	camera_.translation_ = {15.0f, 35.0f, -20.0f};
 	camera_.rotation_.x = 0.8f;
-	camera_.rotation_.y = 0.0f;
 	camera_.UpdateMatrix();
 
-	PrimitiveDrawer* primitiveDrawer = PrimitiveDrawer::GetInstance();
-	primitiveDrawer->SetCamera(&camera_);
-
-	cursorTransform_.Initialize();
+	PrimitiveDrawer::GetInstance()->SetCamera(&camera_);
 
 	cellAutomaton_ = new CellAutomaton();
 	cellAutomaton_->Initialize(cellModel_, &camera_);
 
-	// ★ 初期都市配置（グリッド中央付近に小さな街を作る）
-	auto P = [&](int x, int z, CellType t) { cellAutomaton_->PlaceCell(x, z, t); };
-	using C = CellType;
-
-	// 横道路（z=13, x=10〜19）
-	for (int x = 10; x <= 19; ++x)
-		P(x, 13, C::ROAD);
-	// 縦道路（x=14, z=10〜19）
-	for (int z = 10; z <= 19; ++z)
-		P(14, z, C::ROAD);
-
-	// 住宅ブロック（道路の左上）
-	P(11, 11, C::RESIDENTIAL);
-	P(12, 11, C::RESIDENTIAL);
-	P(11, 12, C::RESIDENTIAL);
-	P(12, 12, C::RESIDENTIAL);
-
-	// 商業ブロック（道路の右上）
-	P(15, 11, C::COMMERCIAL);
-	P(16, 11, C::COMMERCIAL);
-	P(15, 12, C::COMMERCIAL);
-
-	// 工業ブロック（道路の左下）
-	P(11, 14, C::INDUSTRIAL);
-	P(12, 14, C::INDUSTRIAL);
-	P(11, 15, C::INDUSTRIAL);
-
-	// 公園（道路の右下）
-	P(15, 14, C::PARK);
-	P(16, 14, C::PARK);
-	P(15, 15, C::PARK);
-	P(16, 15, C::PARK);
-
-	// 追加の住宅（道路沿い）
-	P(11, 10, C::RESIDENTIAL);
-	P(13, 10, C::RESIDENTIAL);
-	P(17, 11, C::RESIDENTIAL);
-	P(18, 12, C::RESIDENTIAL);
-	P(17, 15, C::RESIDENTIAL);
-	P(18, 15, C::RESIDENTIAL);
-
-	// ★ 初期配置をターン0としてタイムラインに記録
-	cellAutomaton_->SaveInitialSnapshot();
-
 	debugCamera_ = new DebugCamera(1280, 720);
 	debugCamera_->Update();
+}
+
+// ★ 建設費を払って建物を置く
+// 資金不足なら建設できない（falseを返す）
+bool GameScene::TryBuildCell(int x, int z, CellType type) {
+	float cost = GetBuildingCost(type).buildCost;
+
+	// 既存の建物を撤去する場合はコストなし
+	Cell* existing = cellAutomaton_->GetCell(x, z);
+	if (existing && existing->type != CellType::EMPTY) {
+		// 撤去は無料（将来的に撤去費を追加してもよい）
+	}
+
+	if (cityBalance_ < cost)
+		return false; // 資金不足
+
+	cityBalance_ -= cost;
+	cellAutomaton_->PlaceCell(x, z, type);
+	return true;
 }
 
 void GameScene::Update() {
@@ -93,173 +60,140 @@ void GameScene::Update() {
 	if (input_->TriggerKey(DIK_RIGHT))
 		cellAutomaton_->MoveCursor(1, 0);
 
-	// 配置タイプ切り替え＋設置
-	if (input_->TriggerKey(DIK_1)) {
-		currentPlacingType = CellType::ROAD;
-		cellAutomaton_->PlaceCellAtCursor(currentPlacingType);
-	}
-	if (input_->TriggerKey(DIK_2)) {
-		currentPlacingType = CellType::RESIDENTIAL;
-		cellAutomaton_->PlaceCellAtCursor(currentPlacingType);
-	}
-	if (input_->TriggerKey(DIK_3)) {
-		currentPlacingType = CellType::COMMERCIAL;
-		cellAutomaton_->PlaceCellAtCursor(currentPlacingType);
-	}
-	if (input_->TriggerKey(DIK_4)) {
-		currentPlacingType = CellType::INDUSTRIAL;
-		cellAutomaton_->PlaceCellAtCursor(currentPlacingType);
-	}
-	if (input_->TriggerKey(DIK_5)) {
-		currentPlacingType = CellType::PARK;
-		cellAutomaton_->PlaceCellAtCursor(currentPlacingType);
-	}
-	if (input_->TriggerKey(DIK_0)) {
-		int x, z;
-		cellAutomaton_->GetCursorPosition(x, z);
-		cellAutomaton_->RemoveCell(x, z);
-	}
+	// 建物配置（資金チェックあり）
+	int cx, cz;
+	cellAutomaton_->GetCursorPosition(cx, cz);
 
-	// デバッグカメラ更新
-	if (!ImGui::GetIO().WantCaptureMouse) {
+	auto tryPlace = [&](CellType type) {
+		currentPlacingType = type;
+		TryBuildCell(cx, cz, type);
+	};
+
+	if (input_->TriggerKey(DIK_1))
+		tryPlace(CellType::ROAD);
+	if (input_->TriggerKey(DIK_2))
+		tryPlace(CellType::RESIDENTIAL);
+	if (input_->TriggerKey(DIK_3))
+		tryPlace(CellType::COMMERCIAL);
+	if (input_->TriggerKey(DIK_4))
+		tryPlace(CellType::INDUSTRIAL);
+	if (input_->TriggerKey(DIK_5))
+		tryPlace(CellType::PARK);
+	if (input_->TriggerKey(DIK_0))
+		cellAutomaton_->RemoveCell(cx, cz); // 撤去は無料
+
+	// デバッグカメラ
+	if (!ImGui::GetIO().WantCaptureMouse)
 		debugCamera_->Update();
-	}
 	camera_.matView = debugCamera_->GetCamera().matView;
 	camera_.matProjection = debugCamera_->GetCamera().matProjection;
 	camera_.TransferMatrix();
 
+	// シミュレーション更新
 	cellAutomaton_->Update(deltaTime_);
 
+	// ★ 財政更新（毎financeInterval_秒ごと）
+	if (cellAutomaton_->enableSimulation_) {
+		financeTimer_ += deltaTime_;
+		if (financeTimer_ >= financeInterval_) {
+			financeTimer_ = 0.0f;
+
+			float income = cellAutomaton_->GetTotalIncome();
+			float maintenance = cellAutomaton_->GetTotalMaintenance();
+			float netProfit = income - maintenance;
+
+			cityBalance_ += netProfit;
+
+			// 財政破綻チェック
+			isBankrupt_ = (cityBalance_ < 0.0f);
+		}
+	}
+
 	// ImGui
-	ImGuiManager* imguiManager = ImGuiManager::GetInstance();
-	imguiManager->Begin();
+	ImGuiManager::GetInstance()->Begin();
 
-	int cursorX, cursorZ;
-	cellAutomaton_->GetCursorPosition(cursorX, cursorZ);
-
-	// 都市統計
+	// ── City Statistics ──
 	ImGui::Begin("City Statistics");
-	int totalPopulation = 0;
-	float totalIncome = 0.0f;
-	int cellCounts[6] = {0};
-	float totalTraffic = 0.0f;
-	int roadCount = 0;
-	int gridSize = cellAutomaton_->GetGridSize();
 
-	for (int x = 0; x < gridSize; x++) {
-		for (int z = 0; z < gridSize; z++) {
-			Cell* cell = cellAutomaton_->GetCell(x, z);
-			if (cell && cell->type != CellType::EMPTY) {
-				totalPopulation += cell->population;
-				totalIncome += cell->income;
-				cellCounts[static_cast<int>(cell->type)]++;
-				if (cell->type == CellType::ROAD) {
-					totalTraffic += cell->traffic;
-					roadCount++;
-				}
-			}
-		}
-	}
+	// 財政サマリー
+	ImGui::Text("=== Finance ===");
+	ImGui::TextColored(ImVec4(1, 1, 0, 1), "Balance:  $%.0f", cityBalance_);
+	float income = cellAutomaton_->GetTotalIncome();
+	float maintenance = cellAutomaton_->GetTotalMaintenance();
+	float net = income - maintenance;
+	ImGui::Text("Income:      +$%.1f/s", income);
+	ImGui::Text("Maintenance: -$%.1f/s", maintenance);
 
-	ImGui::Text("=== Economy ===");
-	ImGui::Text("Population: %d", totalPopulation);
-	ImGui::Text("Income: $%.1f/sec", totalIncome);
+	// 収支がプラスかマイナスかで色を変える
+	if (net >= 0)
+		ImGui::TextColored(ImVec4(0, 1, 0, 1), "Net:      +$%.1f/s", net);
+	else
+		ImGui::TextColored(ImVec4(1, 0, 0, 1), "Net:      -$%.1f/s", -net);
+
+	if (isBankrupt_)
+		ImGui::TextColored(ImVec4(1, 0, 0, 1), "!! BANKRUPT !!");
 
 	ImGui::Separator();
-	ImGui::Text("=== Buildings ===");
-	ImGui::Text("Residential: %d", cellCounts[static_cast<int>(CellType::RESIDENTIAL)]);
-	ImGui::Text("Commercial:  %d", cellCounts[static_cast<int>(CellType::COMMERCIAL)]);
-	ImGui::Text("Industrial:  %d", cellCounts[static_cast<int>(CellType::INDUSTRIAL)]);
-	ImGui::Text("Parks:       %d", cellCounts[static_cast<int>(CellType::PARK)]);
-	ImGui::Text("Roads:       %d", cellCounts[static_cast<int>(CellType::ROAD)]);
+	ImGui::Text("=== Population ===");
+	ImGui::Text("Total: %d", cellAutomaton_->GetTotalPopulation());
 
-	ImGui::Separator();
-	ImGui::Text("=== Traffic ===");
-	if (roadCount > 0) {
-		float avg = totalTraffic / roadCount;
-		ImGui::Text("Avg Traffic: %.1f%%", avg * 100.0f);
-		if (avg < 0.3f)
-			ImGui::TextColored(ImVec4(0, 1, 0, 1), "Status: Smooth");
-		else if (avg < 0.7f)
-			ImGui::TextColored(ImVec4(1, 1, 0, 1), "Status: Moderate");
-		else
-			ImGui::TextColored(ImVec4(1, 0, 0, 1), "Status: CONGESTED!");
-	} else {
-		ImGui::Text("No roads built");
-	}
-	ImGui::End(); // City Statistics ここで閉じる
+	ImGui::End();
 
-	// ★ タイムラインを別ウィンドウに分離
-	ImGui::Begin("Timeline");
-	int historySize = cellAutomaton_->GetHistorySize();
-	if (historySize > 0) {
-		int currentIdx = cellAutomaton_->GetCurrentSnapshotIndex();
-		if (ImGui::SliderInt("Turn", &currentIdx, 0, historySize - 1)) {
-			cellAutomaton_->enableAutomaton_ = false;
-			cellAutomaton_->isPlaying_ = false;
-			cellAutomaton_->SeekToSnapshot(currentIdx);
-		}
-		int displayIdx = cellAutomaton_->GetCurrentSnapshotIndex();
-		ImGui::Text("Turn %d / %d", displayIdx + 1, historySize);
-		ImGui::Separator();
-		if (cellAutomaton_->isPlaying_) {
-			if (ImGui::Button("  Stop  ")) {
-				cellAutomaton_->isPlaying_ = false;
-			}
-		} else {
-			if (ImGui::Button("  Play  ")) {
-				cellAutomaton_->isPlaying_ = true;
-				cellAutomaton_->playTimer_ = 0.0f;
-				// ★ 常にhistoryの先頭（index=0）から再生
-				cellAutomaton_->SeekToSnapshot(0);
-			}
-		}
-		ImGui::SameLine();
-		ImGui::SliderFloat("Speed", &cellAutomaton_->playInterval_, 0.1f, 2.0f);
-	} else {
-		ImGui::TextDisabled("No history. Enable Automaton to record.");
-	}
-	ImGui::End(); // Timeline
-
-	// コントロール
+	// ── Controls ──
 	ImGui::Begin("Controls");
+
 	const char* typeNames[] = {"Empty", "Road", "Residential", "Commercial", "Industrial", "Park"};
 	const ImVec4 typeColors[] = {
 	    {0.5f, 0.5f, 0.5f, 1},
         {0.6f, 0.6f, 0.6f, 1},
-        {0.2f, 0.8f, 0.2f, 1},
-        {0.2f, 0.2f, 0.8f, 1},
-        {0.8f, 0.6f, 0.1f, 1},
-        {0.1f, 0.7f, 0.1f, 1}
+        {0.2f, 0.9f, 0.2f, 1},
+        {0.2f, 0.2f, 0.9f, 1},
+        {0.9f, 0.6f, 0.1f, 1},
+        {0.1f, 0.8f, 0.1f, 1}
     };
 
+	// 選択中タイプと建設費表示
 	ImGui::Text("=== Place Type ===");
 	ImGui::TextColored(typeColors[static_cast<int>(currentPlacingType)], "Selected: %s", typeNames[static_cast<int>(currentPlacingType)]);
+
+	// 建設費一覧
 	ImGui::Separator();
-	ImGui::Text("1:Road  2:Residential");
-	ImGui::Text("3:Commercial  4:Industrial");
-	ImGui::Text("5:Park  0:Remove");
+	ImGui::Text("Build costs:");
+	CellType types[] = {CellType::ROAD, CellType::RESIDENTIAL, CellType::COMMERCIAL, CellType::INDUSTRIAL, CellType::PARK};
+	int keys[] = {1, 2, 3, 4, 5};
+	for (int i = 0; i < 5; ++i) {
+		auto cost = GetBuildingCost(types[i]);
+		ImGui::TextColored(typeColors[static_cast<int>(types[i])], "%d:%-12s $%.0f (maint:$%.0f)", keys[i], typeNames[static_cast<int>(types[i])], cost.buildCost, cost.maintenanceCost);
+	}
+	ImGui::Text("0: Remove (free)");
 	ImGui::Text("Arrow: Move Cursor");
 
+	// カーソル位置と建物情報
 	ImGui::Separator();
-	ImGui::Text("Cursor: (%d, %d)", cursorX, cursorZ);
-
-	Cell* cell = cellAutomaton_->GetCell(cursorX, cursorZ);
+	ImGui::Text("Cursor: (%d, %d)", cx, cz);
+	Cell* cell = cellAutomaton_->GetCell(cx, cz);
 	if (cell && cell->type != CellType::EMPTY) {
-		ImGui::TextColored(typeColors[static_cast<int>(cell->type)], "Cell: %s Lv.%d", typeNames[static_cast<int>(cell->type)], cell->level);
+		ImGui::TextColored(typeColors[static_cast<int>(cell->type)], "Cell: %s  Lv.%d", typeNames[static_cast<int>(cell->type)], cell->level);
 		ImGui::Text("Population: %d", cell->population);
-		ImGui::Text("Income: $%.1f", cell->income);
-		if (cell->type == CellType::ROAD)
-			ImGui::Text("Traffic: %.1f%%", cell->traffic * 100.0f);
+		ImGui::Text("Income:     $%.1f", cell->income);
+		ImGui::Text("Maint:     -$%.1f", GetBuildingCost(cell->type).maintenanceCost);
 
-		// ★ 建物があるときだけ影響範囲の説明を出す
-		ImGui::Separator();
-		ImGui::TextColored(ImVec4(1, 1, 0, 1), "Yellow lines = influence range");
+		// 道路接続状態
+		const int dx[] = {0, 0, 1, -1}, dz[] = {1, -1, 0, 0};
+		bool hasRoad = false;
+		for (int i = 0; i < 4; ++i) {
+			Cell* n = cellAutomaton_->GetCell(cx + dx[i], cz + dz[i]);
+			if (n && n->type == CellType::ROAD) {
+				hasRoad = true;
+				break;
+			}
+		}
+		ImGui::TextColored(hasRoad ? ImVec4(0, 1, 0, 1) : ImVec4(1, 0, 0, 1), hasRoad ? "Road: Connected" : "Road: NOT connected");
 	}
 
 	ImGui::Separator();
-	ImGui::Checkbox("Enable Automaton", &cellAutomaton_->enableAutomaton_);
-	ImGui::SliderFloat("Interval(s)", &cellAutomaton_->updateInterval_, 0.2f, 5.0f);
+	ImGui::Checkbox("Enable Simulation", &cellAutomaton_->enableSimulation_);
+	ImGui::SliderFloat("Interval(s)", &cellAutomaton_->simInterval_, 0.2f, 3.0f);
 
 	ImGui::Separator();
 	ImGui::Text("=== Camera ===");
@@ -269,33 +203,26 @@ void GameScene::Update() {
 
 	ImGui::End();
 
-	imguiManager->End();
+	ImGuiManager::GetInstance()->End();
 }
 
 void GameScene::Draw() {
 	Model::PreDraw();
 
-	PrimitiveDrawer* primitiveDrawer = PrimitiveDrawer::GetInstance();
+	PrimitiveDrawer* pd = PrimitiveDrawer::GetInstance();
+	cellAutomaton_->Draw(pd);
 
-	// ★ PrimitiveDrawerを渡してDraw（内部でラインも描画）
-	cellAutomaton_->Draw(primitiveDrawer);
-
-	float gridSize = 30.0f;
-	float interval = 1.0f;
-
-	primitiveDrawer->DrawLine3d({0, 0.05f, 0}, {gridSize, 0.05f, 0}, {1, 1, 1, 1});
-	primitiveDrawer->DrawLine3d({gridSize, 0.05f, 0}, {gridSize, 0.05f, gridSize}, {1, 1, 1, 1});
-	primitiveDrawer->DrawLine3d({gridSize, 0.05f, gridSize}, {0, 0.05f, gridSize}, {1, 1, 1, 1});
-	primitiveDrawer->DrawLine3d({0, 0.05f, gridSize}, {0, 0.05f, 0}, {1, 1, 1, 1});
-
+	const float gs = 30.0f, y = 0.05f;
+	pd->DrawLine3d({0, y, 0}, {gs, y, 0}, {1, 1, 1, 1});
+	pd->DrawLine3d({gs, y, 0}, {gs, y, gs}, {1, 1, 1, 1});
+	pd->DrawLine3d({gs, y, gs}, {0, y, gs}, {1, 1, 1, 1});
+	pd->DrawLine3d({0, y, gs}, {0, y, 0}, {1, 1, 1, 1});
 	for (int i = 1; i < 30; ++i) {
-		float pos = i * interval;
-		primitiveDrawer->DrawLine3d({0, 0.05f, pos}, {gridSize, 0.05f, pos}, {0.6f, 0.6f, 0.6f, 0.8f});
-		primitiveDrawer->DrawLine3d({pos, 0.05f, 0}, {pos, 0.05f, gridSize}, {0.6f, 0.6f, 0.6f, 0.8f});
+		float p = static_cast<float>(i);
+		pd->DrawLine3d({0, y, p}, {gs, y, p}, {0.5f, 0.5f, 0.5f, 0.6f});
+		pd->DrawLine3d({p, y, 0}, {p, y, gs}, {0.5f, 0.5f, 0.5f, 0.6f});
 	}
 
 	Model::PostDraw();
-
-	ImGuiManager* imguiManager = ImGuiManager::GetInstance();
-	imguiManager->Draw();
+	ImGuiManager::GetInstance()->Draw();
 }
