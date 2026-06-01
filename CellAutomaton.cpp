@@ -39,13 +39,13 @@ void CellAutomaton::Initialize(KamataEngine::Model* model, KamataEngine::Camera*
 	//    住宅以外の建物（道路・商業・工業・公園）：黒
 	//    空きマス：白
 	//    → 住宅の満足度だけがくっきり浮かび上がる。
-	heatStrongBad_ = KamataEngine::TextureManager::Load("darkRed1x1.png"); // 強い悪影響
-	heatBad_ = KamataEngine::TextureManager::Load("red1x1.png");          // 悪影響
-	heatNeutral_ = KamataEngine::TextureManager::Load("white1x1.png");    // 中立
-	heatGood_ = KamataEngine::TextureManager::Load("green1x1.png");      // やや好影響
-	heatVeryGood_ = KamataEngine::TextureManager::Load("darkGreen1x1.png");   // 強い好影響
-	heatOther_ = KamataEngine::TextureManager::Load("black1x1.png");      // 住宅以外の建物（黒）
-	heatEmpty_ = KamataEngine::TextureManager::Load("white1x1.png");      // 空きマス（白）
+	heatStrongBad_ = KamataEngine::TextureManager::Load("darkRed1x1.png");  // 強い悪影響
+	heatBad_ = KamataEngine::TextureManager::Load("red1x1.png");            // 悪影響
+	heatNeutral_ = KamataEngine::TextureManager::Load("white1x1.png");      // 中立
+	heatGood_ = KamataEngine::TextureManager::Load("green1x1.png");         // やや好影響
+	heatVeryGood_ = KamataEngine::TextureManager::Load("darkGreen1x1.png"); // 強い好影響
+	heatOther_ = KamataEngine::TextureManager::Load("black1x1.png");        // 住宅以外の建物（黒）
+	heatEmpty_ = KamataEngine::TextureManager::Load("white1x1.png");        // 空きマス（白）
 
 	cursorWorldTransform_.Initialize();
 }
@@ -82,6 +82,16 @@ int CellAutomaton::CountNearbyType(int x, int z, CellType type, int radius) {
 				count++;
 		}
 	return count;
+}
+
+// ★ 築年数から収入効率(0〜1)を求める
+//    新築〜AGE_GRACEターンは1.0。以降は1ターンごとにAGE_DECAYずつ下がり、
+//    AGE_MIN_EFFで底打ち。撤去→再建（PlaceCellでage=0）で若返る。
+float CellAutomaton::AgeEfficiency(int age) const {
+	if (age <= AGE_GRACE)
+		return 1.0f;
+	float eff = 1.0f - (age - AGE_GRACE) * AGE_DECAY;
+	return std::max(AGE_MIN_EFF, eff);
 }
 
 // ══════════════════════════════════════
@@ -137,8 +147,8 @@ void CellAutomaton::UpdateSatisfaction(int x, int z) {
 
 	// 周辺環境
 	s += CountNearbyType(x, z, CellType::PARK, 2) * 15.0f;       // 公園：快適さ
-	s += CountNearbyType(x, z, CellType::COMMERCIAL, 3) * 8.0f;  // 商業：便利さ
-	s -= CountNearbyType(x, z, CellType::INDUSTRIAL, 3) * 20.0f; // 工業：公害
+	s += CountNearbyType(x, z, CellType::COMMERCIAL, 3) * 15.0f; // 商業：便利さ
+	s -= CountNearbyType(x, z, CellType::INDUSTRIAL, 3) * 30.0f; // 工業：公害
 
 	// ── 2段目：近隣住宅からの伝播 ──
 	// 周りの住宅が良い街なら自分も少し上がり、荒れていれば下がる（ご近所効果）。
@@ -235,63 +245,98 @@ void CellAutomaton::SimulateResidential(int x, int z) {
 	Cell& cell = grid_[x][z];
 
 	int maxPop = 100 * (cell.level + 1);
-	int targetPop = static_cast<int>(maxPop * (cell.satisfaction / 100.0f));
+	float sat = cell.satisfaction;
 
-	// 目標に向かって毎ターン±10ずつ近づく
-	if (cell.population < targetPop)
-		cell.population = std::min(targetPop, cell.population + 10);
-	else if (cell.population > targetPop)
-		cell.population = std::max(targetPop, cell.population - 10);
+	// ★ 満足度で直接増減（目標人口方式をやめる）
+	//   満足度70以上  → 人口増加（上限はmaxPop）
+	//   満足度40〜70  → 変化なし
+	//   満足度20〜40  → 人口減少（遅め）
+	//   満足度20以下  → 人口急減
+	if (sat >= 70.f) {
+		int gain = static_cast<int>((sat - 70.f) / 10.f) + 1; // +1〜+4
+		cell.population = std::min(maxPop, cell.population + gain);
+	} else if (sat >= 40.f) {
+		// 現状維持
+	} else if (sat >= 20.f) {
+		int loss = static_cast<int>((40.f - sat) / 10.f) + 1; // -1〜-3
+		cell.population = std::max(0, cell.population - loss);
+	} else {
+		// 満足度20以下：急減
+		int loss = static_cast<int>((20.f - sat) / 4.f) + 3; // -3〜-8
+		cell.population = std::max(0, cell.population - loss);
+	}
 
-	cell.income = cell.population * 0.05f;
+	// ★ 住宅は収入を出さない（人口を生む場所に専念）。
+	//    収入源は商業・工業に集約する。
+	cell.income = 0.0f;
 }
 
 // 商業施設の収入を更新
-// 道路接続＋近くの住宅数で利用客（=人口）が決まる
+// ★ 住民が客。近隣（半径4）の住宅人口が多いほど儲かる。道路接続が必須。
+//    ただし1施設が捌ける客数には上限（キャパ）がある＝青天井ではない。
+//    近隣に工業があるとキャパが上がる（仕入れ能力UP）＝工業との連携。
 void CellAutomaton::SimulateCommercial(int x, int z) {
 	Cell& cell = grid_[x][z];
 
+	// 道路に繋がっていないと客が来ない＝稼働ゼロ
 	if (!IsAdjacentToRoad(x, z)) {
-		cell.population = std::max(0, cell.population - 5);
-		cell.income = cell.population * 0.15f;
+		cell.population = 0;
+		cell.income = 0.0f;
 		return;
 	}
 
-	int targetWorkers = 30 * (cell.level + 1);
-	targetWorkers += CountNearbyType(x, z, CellType::RESIDENTIAL, 4) * 5; // 近くの住民が客
-	targetWorkers = std::max(0, targetWorkers);
+	// 近隣の住宅人口を「客の数」とみなして集計
+	int customers = 0;
+	const int radius = 4;
+	for (int dx = -radius; dx <= radius; ++dx)
+		for (int dz = -radius; dz <= radius; ++dz) {
+			if (dx == 0 && dz == 0)
+				continue;
+			int nx = x + dx, nz = z + dz;
+			if (nx < 0 || nx >= GRID_SIZE || nz < 0 || nz >= GRID_SIZE)
+				continue;
+			if (grid_[nx][nz].type == CellType::RESIDENTIAL)
+				customers += grid_[nx][nz].population;
+		}
 
-	if (cell.population < targetWorkers)
-		cell.population = std::min(targetWorkers, cell.population + 5);
-	else if (cell.population > targetWorkers)
-		cell.population = std::max(targetWorkers, cell.population - 5);
+	// ★ 天井：1施設が捌ける基本キャパ
+	float capacity = 200.0f * (cell.level + 1);
 
-	cell.income = cell.population * 0.15f;
+	// ★ 工業連携：近隣（半径4）の工業1つにつきキャパ+50%、最大+150%
+	int factories = CountNearbyType(x, z, CellType::INDUSTRIAL, radius);
+	float boost = 1.0f + std::min(1.5f, factories * 0.5f);
+	capacity *= boost;
+
+	// 実際に捌ける客数はキャパで頭打ち
+	int served = std::min(customers, static_cast<int>(capacity));
+
+	// 捌いた客数を稼働度(population)として保持（Cell Info表示・デバッグ用）
+	cell.population = served;
+
+	// ★ 収入：捌いた客1人あたり 0.15 × 老朽化効率
+	cell.income = served * 0.15f * AgeEfficiency(cell.age);
 }
 
 // 工業施設の収入を更新
-// 道路接続で操業できるが、住宅が近いと効率が下がる
+// ★ 住民は不要。道路接続さえあれば住民数に関係なく安定して稼ぐ。
+//    代わりに周囲へ公害（UpdateSatisfactionで住宅の満足度を-30/個）を撒く。
+//    → 住宅から離して置く必要がある。「稼ぎたいが街を汚す」ジレンマ。
 void CellAutomaton::SimulateIndustrial(int x, int z) {
 	Cell& cell = grid_[x][z];
 
+	// 道路に繋がっていないと出荷できない＝稼働ゼロ
 	if (!IsAdjacentToRoad(x, z)) {
-		cell.population = std::max(0, cell.population - 5);
-		cell.income = cell.population * 0.10f;
+		cell.population = 0;
+		cell.income = 0.0f;
 		return;
 	}
 
-	int targetWorkers = 40 * (cell.level + 1);
-	targetWorkers -= CountNearbyType(x, z, CellType::RESIDENTIAL, 3) * 8; // 住宅が近いと操業効率↓
-	targetWorkers = std::max(0, targetWorkers);
-
-	if (cell.population < targetWorkers)
-		cell.population = std::min(targetWorkers, cell.population + 5);
-	else if (cell.population > targetWorkers)
-		cell.population = std::max(targetWorkers, cell.population - 5);
-
-	cell.income = cell.population * 0.10f;
+	// 住民数に関係なく、レベルに応じた固定の生産量
+	int baseOutput = 30 * (cell.level + 1);
+	cell.population = baseOutput; // 稼働度として保持（表示用）
+	// ★ 収入：1ユニット0.4 × 老朽化効率
+	cell.income = baseOutput * 0.4f * AgeEfficiency(cell.age);
 }
-
 float CellAutomaton::GetAverageSatisfaction() const {
 	float total = 0.0f;
 	int count = 0;
@@ -306,18 +351,23 @@ float CellAutomaton::GetAverageSatisfaction() const {
 
 // 全セルのシミュレーションを1ステップ実行
 void CellAutomaton::RunSimulation() {
-	// ★ まず現在の満足度を前ターン値としてスナップショット
-	//    （このあとの伝播計算は、すべてこの固定値を読む＝走査順に依存しない）
+	// 満足度を前ターン値としてスナップショット
 	for (int x = 0; x < GRID_SIZE; ++x)
 		for (int z = 0; z < GRID_SIZE; ++z)
 			prevSatisfaction_[x][z] = grid_[x][z].satisfaction;
 
-	// 満足度を更新（人口計算の入力になる）
+	// ★ 建物の築年数を1ターン分進める（空き地は対象外）
+	for (int x = 0; x < GRID_SIZE; ++x)
+		for (int z = 0; z < GRID_SIZE; ++z)
+			if (grid_[x][z].type != CellType::EMPTY)
+				grid_[x][z].age++;
+
+	// 満足度を更新
 	for (int x = 0; x < GRID_SIZE; ++x)
 		for (int z = 0; z < GRID_SIZE; ++z)
 			UpdateSatisfaction(x, z);
 
-	// 満足度に基づいて人口・収入を更新
+	// 人口を更新
 	for (int x = 0; x < GRID_SIZE; ++x)
 		for (int z = 0; z < GRID_SIZE; ++z) {
 			switch (grid_[x][z].type) {
@@ -335,10 +385,55 @@ void CellAutomaton::RunSimulation() {
 			}
 		}
 
-	// ★ 満足度が確定した後に、町への寄与度（色分け用）を更新
+	// 寄与度を更新（ヒートマップ用）
 	for (int x = 0; x < GRID_SIZE; ++x)
 		for (int z = 0; z < GRID_SIZE; ++z)
 			UpdateInfluence(x, z);
+
+	// ★ このターンの総収入を集計（商業・工業の内訳も取る）
+	float income = 0.0f;
+	float comIncome = 0.0f, indIncome = 0.0f;
+	float maintenance = 0.0f; // ★ 維持費の合計
+	for (int x = 0; x < GRID_SIZE; ++x)
+		for (int z = 0; z < GRID_SIZE; ++z) {
+			Cell& c = grid_[x][z];
+			income += c.income;
+			if (c.type == CellType::COMMERCIAL)
+				comIncome += c.income;
+			else if (c.type == CellType::INDUSTRIAL)
+				indIncome += c.income;
+			// ★ 建物ごとの維持費を加算（空き地は0）
+			maintenance += GetBuildingCost(c.type).maintCost;
+		}
+
+	// ★ 純収益 = 総収入 - 維持費。これを残高に反映する（赤字なら残高が減る）
+	float net = income - maintenance;
+
+	lastTurnIncome_ = income; // 表示用
+	lastTurnMaintenance_ = maintenance;
+	lastTurnNet_ = net;
+	pendingIncome_ += net; // ★ 回収待ちには純収益を積む
+
+	// ★ 収入ログに記録
+	IncomeLogEntry incEntry;
+	incEntry.total = income;
+	incEntry.commercial = comIncome;
+	incEntry.industrial = indIncome;
+	incEntry.maintenance = maintenance;
+	incEntry.net = net;
+	incomeLog_.push_back(incEntry);
+	if ((int)incomeLog_.size() > MAX_LOG)
+		incomeLog_.erase(incomeLog_.begin());
+
+	// ★ 人口ログに記録
+	int currentPop = GetTotalPopulation();
+	PopLogEntry entry;
+	entry.total = currentPop;
+	entry.delta = currentPop - prevTotalPop_;
+	prevTotalPop_ = currentPop;
+	popLog_.push_back(entry);
+	if ((int)popLog_.size() > MAX_LOG)
+		popLog_.erase(popLog_.begin());
 }
 
 // ══════════════════════════════════════
@@ -347,27 +442,14 @@ void CellAutomaton::RunSimulation() {
 
 int CellAutomaton::GetTotalPopulation() const {
 	int total = 0;
-	for (int x = 0; x < GRID_SIZE; ++x)
-		for (int z = 0; z < GRID_SIZE; ++z)
-			total += grid_[x][z].population;
-	return total;
-}
-
-float CellAutomaton::GetTotalIncome() const {
-	float total = 0.0f;
-	for (int x = 0; x < GRID_SIZE; ++x)
-		for (int z = 0; z < GRID_SIZE; ++z)
-			total += grid_[x][z].income;
-	return total;
-}
-
-// ★ 全建物の維持費合計
-float CellAutomaton::GetTotalMaintenance() const {
-	float total = 0.0f;
-	for (int x = 0; x < GRID_SIZE; ++x)
-		for (int z = 0; z < GRID_SIZE; ++z)
-			if (grid_[x][z].type != CellType::EMPTY)
-				total += GetBuildingCost(grid_[x][z].type).maintenanceCost;
+	for (int x = 0; x < GRID_SIZE; ++x) {
+		for (int z = 0; z < GRID_SIZE; ++z) {
+			// ★ 住宅（RESIDENTIAL）の人口だけを合計する
+			if (grid_[x][z].type == CellType::RESIDENTIAL) {
+				total += grid_[x][z].population;
+			}
+		}
+	}
 	return total;
 }
 
@@ -400,6 +482,7 @@ void CellAutomaton::PlaceCell(int x, int z, CellType type) {
 	grid_[x][z].income = 0.0f;
 	grid_[x][z].satisfaction = 50.0f; // ★ 配置時に満足度を初期化
 	grid_[x][z].influence = 0.0f;     // ★ 寄与度も初期化
+	grid_[x][z].age = 0;              // ★ 築年数リセット（建て替えで若返る）
 }
 
 void CellAutomaton::PlaceCellAtCursor(CellType type) { PlaceCell(cursorX_, cursorZ_, type); }

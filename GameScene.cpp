@@ -1,6 +1,8 @@
+#define NOMINMAX
 #include "GameScene.h"
 #include "WorldTransform.h"
 #include <2d/ImGuiManager.h>
+#include <algorithm>
 
 using namespace KamataEngine;
 
@@ -96,22 +98,9 @@ void GameScene::Update() {
 	// シミュレーション更新
 	cellAutomaton_->Update(deltaTime_);
 
-	// ★ 財政更新（毎financeInterval_秒ごと）
-	if (cellAutomaton_->enableSimulation_) {
-		financeTimer_ += deltaTime_;
-		if (financeTimer_ >= financeInterval_) {
-			financeTimer_ = 0.0f;
-
-			float income = cellAutomaton_->GetTotalIncome();
-			float maintenance = cellAutomaton_->GetTotalMaintenance();
-			float netProfit = income - maintenance;
-
-			cityBalance_ += netProfit;
-
-			// 財政破綻チェック
-			isBankrupt_ = (cityBalance_ < 0.0f);
-		}
-	}
+	// ★ このターンに発生した収入を残高へ加算
+	//    （ターンが進んだフレームだけ非ゼロ。毎フレームの二重加算は起きない）
+	cityBalance_ += cellAutomaton_->CollectIncome();
 
 	// ImGui
 	ImGuiManager::GetInstance()->Begin();
@@ -137,44 +126,74 @@ void GameScene::Update() {
 
 	float avgSat = cellAutomaton_->GetAverageSatisfaction();
 	int pop = cellAutomaton_->GetTotalPopulation();
-	float income = cellAutomaton_->GetTotalIncome();
-	float maintenance = cellAutomaton_->GetTotalMaintenance();
-	float net = income - maintenance;
 
-	// (1) 満足度 ── すべての立地条件がここに集約される
-	ImGui::Text("(1) Satisfaction  -> drives population");
-	ImGui::TextColored(satColorOf(avgSat), "    %.0f / 100", avgSat);
+	// 残高
+	ImGui::Text("=== Finance ===");
+	ImGui::TextColored(ImVec4(1, 1, 0, 1), "Balance: $%.0f", cityBalance_);
+	ImGui::Text("Income/turn:  $%.1f", cellAutomaton_->GetLastTurnIncome());
+	ImGui::Text("Upkeep/turn:  $%.1f", cellAutomaton_->GetLastTurnMaintenance());
+	{
+		float net = cellAutomaton_->GetLastTurnNet();
+		ImVec4 netCol = net > 0.0f ? ImVec4(0, 1, 0, 1) : net < 0.0f ? ImVec4(1, 0.3f, 0.3f, 1) : ImVec4(0.8f, 0.8f, 0.8f, 1);
+		ImGui::TextColored(netCol, "Net/turn:     $%+.1f", net);
+	}
+	if (cityBalance_ <= 0.0f)
+		ImGui::TextColored(ImVec4(1, 0, 0, 1), "No funds!");
+
+	ImGui::Separator();
+
+	// 満足度
+	ImGui::Text("=== Satisfaction ===");
+	ImGui::TextColored(satColorOf(avgSat), "Avg: %.0f / 100", avgSat);
 	ImGui::ProgressBar(avgSat / 100.0f, ImVec2(-1, 0), "");
 
-	ImGui::Spacing();
 	ImGui::Separator();
 
-	// (2) 人口 ── 満足度の結果
-	ImGui::Text("(2) Population");
-	ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1), "    %d people", pop);
+	// 人口（合計のみ）
+	ImGui::Text("=== Population ===");
+	ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.f, 1), "Total: %d", pop);
 
-	ImGui::Spacing();
-	ImGui::Separator();
-
-	// (3) 財政 ── 人口の結果
-	ImGui::Text("(3) Finance");
-	ImGui::TextColored(ImVec4(1, 1, 0, 1), "    Balance: $%.0f", cityBalance_);
-	ImGui::Text("    Income:      +$%.1f/s", income);
-	ImGui::Text("    Maintenance: -$%.1f/s", maintenance);
-	if (net >= 0)
-		ImGui::TextColored(ImVec4(0, 1, 0, 1), "    Net:         +$%.1f/s", net);
-	else
-		ImGui::TextColored(ImVec4(1, 0, 0, 1), "    Net:         -$%.1f/s", -net);
-
-	if (isBankrupt_) {
-		ImGui::Spacing();
-		ImGui::TextColored(ImVec4(1, 0, 0, 1), "!! BANKRUPT !!");
-	}
-
-	ImGui::Spacing();
 	ImGui::Separator();
 	ImGui::Checkbox("Enable Simulation", &cellAutomaton_->enableSimulation_);
-	ImGui::SliderFloat("Speed (interval s)", &cellAutomaton_->simInterval_, 0.2f, 3.0f);
+	ImGui::SliderFloat("Speed (s)", &cellAutomaton_->simInterval_, 0.2f, 3.0f);
+
+	ImGui::End();
+
+	// ══ Population Log（独立ウィンドウ）══
+	ImGui::Begin("Population Log");
+
+	const auto& log = cellAutomaton_->GetPopLog();
+	if (log.empty()) {
+		ImGui::TextDisabled("No data. Enable Simulation.");
+	} else {
+		ImGui::Text("Turn   Total    Change");
+		ImGui::Separator();
+		int shown = 0;
+		for (int i = (int)log.size() - 1; i >= 0 && shown < 15; --i, ++shown) {
+			const PopLogEntry& e = log[i];
+			ImVec4 col = e.delta > 0 ? ImVec4(0, 1, 0, 1) : e.delta < 0 ? ImVec4(1, 0.3f, 0.3f, 1) : ImVec4(0.6f, 0.6f, 0.6f, 1);
+			ImGui::TextColored(col, "T-%2d   %-6d  %+d", (int)log.size() - i, e.total, e.delta);
+		}
+	}
+
+	ImGui::End();
+
+	// ══ Income Log（独立ウィンドウ）══
+	ImGui::Begin("Income Log");
+
+	const auto& incLog = cellAutomaton_->GetIncomeLog();
+	if (incLog.empty()) {
+		ImGui::TextDisabled("No data. Enable Simulation.");
+	} else {
+		ImGui::Text("Turn  Com    Ind    Upkeep  Net");
+		ImGui::Separator();
+		int shownInc = 0;
+		for (int i = (int)incLog.size() - 1; i >= 0 && shownInc < 15; --i, ++shownInc) {
+			const IncomeLogEntry& e = incLog[i];
+			ImVec4 col = e.net > 0.0f ? ImVec4(0, 1, 0, 1) : e.net < 0.0f ? ImVec4(1, 0.3f, 0.3f, 1) : ImVec4(0.6f, 0.6f, 0.6f, 1);
+			ImGui::TextColored(col, "T-%2d  %-5.0f  %-5.0f  %-6.0f  %+.0f", (int)incLog.size() - i, e.commercial, e.industrial, e.maintenance, e.net);
+		}
+	}
 
 	ImGui::End();
 
@@ -224,7 +243,7 @@ void GameScene::Update() {
 		int keys[] = {1, 2, 3, 4, 5};
 		for (int i = 0; i < 5; ++i) {
 			auto cost = GetBuildingCost(types[i]);
-			ImGui::TextColored(typeColors[static_cast<int>(types[i])], "%d:%-12s $%.0f (maint:$%.0f)", keys[i], typeNames[static_cast<int>(types[i])], cost.buildCost, cost.maintenanceCost);
+			ImGui::TextColored(typeColors[static_cast<int>(types[i])], "%d:%-12s $%.0f (up $%.0f)", keys[i], typeNames[static_cast<int>(types[i])], cost.buildCost, cost.maintCost);
 		}
 		ImGui::Text("0  : Remove (free)");
 		ImGui::Text("Tab: Toggle heatmap");
@@ -243,10 +262,40 @@ void GameScene::Update() {
 		ImGui::Text("Cursor: (%d, %d)", cx, cz);
 		Cell* cell = cellAutomaton_->GetCell(cx, cz);
 		if (cell && cell->type != CellType::EMPTY) {
-			ImGui::TextColored(typeColors[static_cast<int>(cell->type)], "%s  Lv.%d", typeNames[static_cast<int>(cell->type)], cell->level);
-			ImGui::Text("Population: %d", cell->population);
-			//ImGui::Text("Income:     $%.1f", cell->income);
-			//ImGui::Text("Maint:     -$%.1f", GetBuildingCost(cell->type).maintenanceCost);
+			ImGui::TextColored(typeColors[static_cast<int>(cell->type)], "%s ", typeNames[static_cast<int>(cell->type)]);
+			if (cell->type == CellType::RESIDENTIAL) {
+				ImGui::Text("Population: %d", cell->population);
+			} else {
+				ImGui::Text("Customer: %d", cell->population);
+			}
+			ImGui::Text("maintenance/turn: $%.1f", GetBuildingCost(cell->type).maintCost);
+
+			// ★ 商業・工業は収入を表示（三すくみの稼ぎが見える）
+			if (cell->type == CellType::COMMERCIAL || cell->type == CellType::INDUSTRIAL) {
+				ImGui::Text("Income/turn: $%.1f", cell->income);
+
+				// ★ 老朽化：築年数と効率（落ちていれば赤）
+				float eff = cellAutomaton_->GetAgeEfficiency(cell->age);
+				ImVec4 effCol = eff >= 0.99f ? ImVec4(0, 1, 0, 1) : eff >= 0.6f ? ImVec4(1, 1, 0, 1) : ImVec4(1, 0.3f, 0.3f, 1);
+				ImGui::Text("Age: %d turns", cell->age);
+				ImGui::TextColored(effCol, "Efficiency: %.0f%%", eff * 100.0f);
+				if (eff < 0.99f)
+					ImGui::TextDisabled("  (rebuild to reset: press 0 then rebuild)");
+			}
+
+			// ★ 商業：近隣の工業数（キャパ強化の根拠）を表示
+			if (cell->type == CellType::COMMERCIAL) {
+				int factories = 0;
+				for (int dx = -4; dx <= 4; ++dx)
+					for (int dz = -4; dz <= 4; ++dz) {
+						if (dx == 0 && dz == 0)
+							continue;
+						Cell* n = cellAutomaton_->GetCell(cx + dx, cz + dz);
+						if (n && n->type == CellType::INDUSTRIAL)
+							factories++;
+					}
+				ImGui::Text("Nearby factories: %d (+%.0f%% cap)", factories, std::min(1.5f, factories * 0.5f) * 100.0f);
+			}
 
 			// 満足度（住宅のみ）
 			if (cell->type == CellType::RESIDENTIAL) {
@@ -254,11 +303,6 @@ void GameScene::Update() {
 				ImGui::TextColored(satColorOf(sat), "Satisfaction: %.0f", sat);
 				ImGui::ProgressBar(sat / 100.0f, ImVec2(-1, 0), "");
 			}
-
-			// ★ 町への寄与度（色分けの根拠）
-			float inf = cell->influence;
-			ImVec4 infColor = inf > 0.1f ? ImVec4(0.1f, 0.8f, 0.1f, 1) : inf < -0.1f ? ImVec4(0.3f, 0.4f, 1.0f, 1) : ImVec4(0.9f, 0.9f, 0.9f, 1);
-			ImGui::TextColored(infColor, "Influence: %+.2f", inf);
 
 			// 道路接続状態
 			const int dx[] = {0, 0, 1, -1}, dz[] = {1, -1, 0, 0};
