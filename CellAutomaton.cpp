@@ -3,292 +3,248 @@
 #include "WorldTransform.h"
 #include <algorithm>
 
+using namespace KamataEngine;
+
+/// <summary>
+/// コンストラクタ。30x30マスのメモリ確保と、各セルの3D位置行列（WorldTransform）の初期化を行う。
+/// </summary>
 CellAutomaton::CellAutomaton() {
-	grid_.resize(GRID_SIZE, std::vector<Cell>(GRID_SIZE));
-	for (int x = 0; x < GRID_SIZE; ++x)
+	// グリッドを30行30列でリサイズ
+	// 第二引数でCell構造体の入った横列を30個作り、それを第一引数の分だけ積み重ねるイメージ(30x30の二次元配列になる)
+	grid_.resize(GRID_SIZE, std::vector<Cell>(GRID_SIZE)); 
+
+
+	// 全セルに対して、3D座標を管理するためのトランスフォーム構造体を生成して初期化
+	for (int x = 0; x < GRID_SIZE; ++x) {
 		for (int z = 0; z < GRID_SIZE; ++z) {
-			grid_[x][z].worldTransform_ = new KamataEngine::WorldTransform();
+			grid_[x][z].worldTransform_ = new WorldTransform();
 			grid_[x][z].worldTransform_->Initialize();
 		}
+	}
 
-	// ★ 満足度スナップショット用バッファ（伝播計算で参照する）
+	// 満足度の伝播計算で参照する「前ターンの満足度スナップショット用バッファ」を50.0（標準値）で初期確保
 	prevSatisfaction_.resize(GRID_SIZE, std::vector<float>(GRID_SIZE, 50.0f));
 }
 
+/// <summary>
+/// デストラクタ。各セルが個別に動的確保していたWorldTransformインスタンスを全て解放する。
+/// </summary>
 CellAutomaton::~CellAutomaton() {
-	for (int x = 0; x < GRID_SIZE; ++x)
-		for (int z = 0; z < GRID_SIZE; ++z)
+	for (int x = 0; x < GRID_SIZE; ++x) {
+		for (int z = 0; z < GRID_SIZE; ++z) {
 			delete grid_[x][z].worldTransform_;
+		}
+	}
 }
 
-void CellAutomaton::Initialize(KamataEngine::Model* model, KamataEngine::Camera* camera) {
+/// <summary>
+/// 各種アセット（通常テクスチャ、およびヒートマップ表示用の色テクスチャ）のロードを行う。
+/// </summary>
+void CellAutomaton::Initialize(Model* model, Camera* camera) {
 	cellModel_ = model;
 	camera_ = camera;
 
-	groundTexture_ = KamataEngine::TextureManager::Load("ground.png");
-	cursorTexture_ = KamataEngine::TextureManager::Load("white1x1.png");
+	// 通常グラフィック用テクスチャの読み込み
+	groundTexture_ = TextureManager::Load("ground.png");
+	cursorTexture_ = TextureManager::Load("white1x1.png");
 
-	textureHandles_[CellType::ROAD] = KamataEngine::TextureManager::Load("gray1x1.png");
-	textureHandles_[CellType::RESIDENTIAL] = KamataEngine::TextureManager::Load("gide1x1.png");
-	textureHandles_[CellType::COMMERCIAL] = KamataEngine::TextureManager::Load("blue1x1.png");
-	textureHandles_[CellType::INDUSTRIAL] = KamataEngine::TextureManager::Load("black1x1.png");
-	textureHandles_[CellType::PARK] = KamataEngine::TextureManager::Load("green1x1.png");
+	// 各建物の色テクスチャハンドルを登録
+	textureHandles_[CellType::ROAD] = TextureManager::Load("gray1x1.png");
+	textureHandles_[CellType::RESIDENTIAL] = TextureManager::Load("gide1x1.png"); // 住宅用
+	textureHandles_[CellType::COMMERCIAL] = TextureManager::Load("blue1x1.png");
+	textureHandles_[CellType::INDUSTRIAL] = TextureManager::Load("black1x1.png");
+	textureHandles_[CellType::PARK] = TextureManager::Load("green1x1.png");
 
-	// ★ ヒートマップ用テクスチャ（既存の単色pngを色として流用）
-	//    住宅：悪い→良い＝紫 → 赤 → 白 → 黄緑 → 緑
-	//    住宅以外の建物（道路・商業・工業・公園）：黒
-	//    空きマス：白
-	//    → 住宅の満足度だけがくっきり浮かび上がる。
-	heatStrongBad_ = KamataEngine::TextureManager::Load("darkRed1x1.png");  // 強い悪影響
-	heatBad_ = KamataEngine::TextureManager::Load("red1x1.png");            // 悪影響
-	heatNeutral_ = KamataEngine::TextureManager::Load("white1x1.png");      // 中立
-	heatGood_ = KamataEngine::TextureManager::Load("green1x1.png");         // やや好影響
-	heatVeryGood_ = KamataEngine::TextureManager::Load("darkGreen1x1.png"); // 強い好影響
-	heatOther_ = KamataEngine::TextureManager::Load("black1x1.png");        // 住宅以外の建物（黒）
-	heatEmpty_ = KamataEngine::TextureManager::Load("white1x1.png");        // 空きマス（白）
+	// ヒートマップ用の各種カラーテクスチャの読み込み（1x1の単色カラーPNGファイルを流用）
+	heatStrongBad_ = TextureManager::Load("darkRed1x1.png");  // 紫：最悪（※ファイル名はdarkRedだが仕様上紫の役割）
+	heatBad_ = TextureManager::Load("red1x1.png");            // 赤：悪い
+	heatNeutral_ = TextureManager::Load("white1x1.png");      // 白：中立
+	heatGood_ = TextureManager::Load("green1x1.png");         // 黄緑：良い
+	heatVeryGood_ = TextureManager::Load("darkGreen1x1.png"); // 緑：最高
+	heatOther_ = TextureManager::Load("black1x1.png");        // 黒：住宅以外
+	heatEmpty_ = TextureManager::Load("white1x1.png");        // 白：さら地
 
+	// 3D空間上のカーソル表示用トランスフォームの初期化
 	cursorWorldTransform_.Initialize();
 }
 
-// ══════════════════════════════════════
-// 住民シミュレーション
-// ══════════════════════════════════════
+// ユーザー入力・ゲーム画面との連携インターフェース
+void CellAutomaton::MoveCursor(int dx, int dz) {
+	// 移動先が30x30の境界線を超えないように0〜29の間でクランプ（制限）する
+	cursorX_ = std::max(0, std::min(GRID_SIZE - 1, cursorX_ + dx));
+	cursorZ_ = std::max(0, std::min(GRID_SIZE - 1, cursorZ_ + dz));
+}
 
-// 上下左右4方向のどこかに道路があるか
+// =================================================================
+// 住民・経営シミュレーションのロジックコア部分
+// =================================================================
+
+/// <summary>
+/// 道路アクセス判定。対象マスの上下左右（4方向）に道路セルが隣接しているかを調査する。
+/// </summary>
 bool CellAutomaton::IsAdjacentToRoad(int x, int z) {
 	const int dx[] = {0, 0, 1, -1};
 	const int dz[] = {1, -1, 0, 0};
+
 	for (int i = 0; i < 4; ++i) {
 		int nx = x + dx[i], nz = z + dz[i];
+		// グリッド範囲外のインデックスを指した場合は無視してスキップ（配列外参照バグ防止）
 		if (nx < 0 || nx >= GRID_SIZE || nz < 0 || nz >= GRID_SIZE)
 			continue;
 		if (grid_[nx][nz].type == CellType::ROAD)
-			return true;
+			return true; // 1つでも道路が見つかれば即座に接続完了とする
 	}
-	return false;
+	return false; // 4方向すべて道路でなければ未接続
 }
 
-// 指定セルから radius マス以内に type の建物が何個あるか
+/// <summary>
+/// 周辺環境の走査。自分の中心座標から一定マス（半径radius）の正方形の範囲に、指定した種類の建物が何個存在するかをカウントする。
+/// </summary>
 int CellAutomaton::CountNearbyType(int x, int z, CellType type, int radius) {
 	int count = 0;
-	for (int dx = -radius; dx <= radius; ++dx)
+	for (int dx = -radius; dx <= radius; ++dx) {
 		for (int dz = -radius; dz <= radius; ++dz) {
 			if (dx == 0 && dz == 0)
-				continue;
+				continue; // 自分自身のマスはカウントから除外
+
 			int nx = x + dx, nz = z + dz;
 			if (nx < 0 || nx >= GRID_SIZE || nz < 0 || nz >= GRID_SIZE)
-				continue;
+				continue; // 街の外枠をはみ出した座標は無視
+
 			if (grid_[nx][nz].type == type)
 				count++;
 		}
+	}
 	return count;
 }
 
-// ★ 築年数から収入効率(0〜1)を求める
-//    新築〜AGE_GRACEターンは1.0。以降は1ターンごとにAGE_DECAYずつ下がり、
-//    AGE_MIN_EFFで底打ち。撤去→再建（PlaceCellでage=0）で若返る。
+/// <summary>
+/// 老朽化に伴う補正倍率の算出。建設後のターン数（age）を元に、建物の稼働効率(0.20〜1.00)を弾き出す。
+/// </summary>
 float CellAutomaton::AgeEfficiency(int age) const {
 	if (age <= AGE_GRACE)
-		return 1.0f;
+		return 1.0f; // 20ターン以内であれば100%フル稼働
+
+	// 20ターンを越えた場合、1ターンごとに効率が0.02(2%)ずつ線形減少する
 	float eff = 1.0f - (age - AGE_GRACE) * AGE_DECAY;
+
+	// 最低でも20%の効率（AGE_MIN_EFF）は下回らないように底打ち処理を行う
 	return std::max(AGE_MIN_EFF, eff);
 }
 
-// ══════════════════════════════════════
-// ★ 満足度の計算（住宅のみ）
-//
-// すべての立地条件を「満足度」という1つの指標に集約する。
-// 住宅の人口は、この満足度から決まる（SimulateResidential）。
-//
-//   1段目（立地）:
-//     ベース            : 50
-//     道路接続あり      : +20  / なし : -50（孤立は致命的）
-//     公園が近い        : +15/個（半径2）
-//     商業が近い        : +8/個（半径3） 便利さ
-//     工業が近い        : -20/個（半径3）公害
-//   2段目（伝播）:
-//     近隣住宅の前ターン満足度の平均に、差の30%だけ引き寄せられる。
-//     → 良い住宅街は周りも良くなり、荒れた街は周りも下がる。
-//        数ターンかけて色が移り変わるのが見える。
-// ══════════════════════════════════════
-// ★ 周囲(半径radius)の住宅の、前ターン満足度の平均
-//    伝播計算は必ず「前ターンの値(prevSatisfaction_)」を読む。
-//    こうすると走査順に依存せず、変化がきれいに波及する。
-//    近くに住宅が1つもなければ -1.0 を返す（呼び出し側で「近所なし」と判定）。
+/// <summary>
+/// 満足度の近隣伝播処理用サブルーチン。半径1マスの範囲にある「他の住宅」の、前ターン時点での満足度平均値を算出する。
+/// </summary>
 float CellAutomaton::AverageNeighborSatisfaction(int x, int z, int radius) {
 	float total = 0.0f;
 	int count = 0;
-	for (int dx = -radius; dx <= radius; ++dx)
+	for (int dx = -radius; dx <= radius; ++dx) {
 		for (int dz = -radius; dz <= radius; ++dz) {
 			if (dx == 0 && dz == 0)
 				continue;
+
 			int nx = x + dx, nz = z + dz;
 			if (nx < 0 || nx >= GRID_SIZE || nz < 0 || nz >= GRID_SIZE)
 				continue;
+
 			if (grid_[nx][nz].type == CellType::RESIDENTIAL) {
-				total += prevSatisfaction_[nx][nz]; // ★ 前ターンの値
+				total += prevSatisfaction_[nx][nz]; // リアルタイムの書き換えバグを防ぐため、前ターンの確定バッファを参照
 				count++;
 			}
 		}
-	return count > 0 ? total / count : -1.0f;
+	}
+
+
+	if (count > 0) {
+		// 1軒以上あったら、平均値を計算して返す
+		return total / count;
+	} else {
+		// 0軒（ぼっち住宅）なら、特殊フラグとして -1.0f を返す
+		return -1.0f;
+	}
 }
 
+/// <summary>
+/// 【重要論理】住宅セルの住民満足度を2段階ステップ（立地条件＋近隣伝播）で決定する。
+/// </summary>
 void CellAutomaton::UpdateSatisfaction(int x, int z) {
 	Cell& cell = grid_[x][z];
 
 	if (cell.type != CellType::RESIDENTIAL)
-		return;
+		return; // 住宅以外の建物には満足度の概念がないため処理スルー
 
-	// ── 1段目：立地条件から「ベース満足度」を出す（従来通り）──
-	float s = 50.0f; // ベース
+	// ── 1段目：純粋な周囲の「立地条件」からベースとなるスコア(s)を決定 ──
+	float s = 50.0f; // フラットな初期評価値
 
-	// 道路接続が最重要
+	// インフラ接続：道路と繋がっていれば+20点、孤立していればスラム化ペナルティとして-50点（致命傷）
 	s += IsAdjacentToRoad(x, z) ? 20.0f : -50.0f;
 
-	// 周辺環境
-	s += CountNearbyType(x, z, CellType::PARK, 2) * 15.0f;       // 公園：快適さ
-	s += CountNearbyType(x, z, CellType::COMMERCIAL, 3) * 15.0f; // 商業：便利さ
-	s -= CountNearbyType(x, z, CellType::INDUSTRIAL, 3) * 30.0f; // 工業：公害
+	// 環境スコアの集計（半径2マスの公園は1個につき+15点、半径3マスの商業施設は+15点、工業公害は1個につき-30点の強烈な減点）
+	s += CountNearbyType(x, z, CellType::PARK, 2) * 15.0f;
+	s += CountNearbyType(x, z, CellType::COMMERCIAL, 3) * 15.0f;
+	s -= CountNearbyType(x, z, CellType::INDUSTRIAL, 3) * 30.0f;
 
-	// ── 2段目：近隣住宅からの伝播 ──
-	// 周りの住宅が良い街なら自分も少し上がり、荒れていれば下がる（ご近所効果）。
-	// ベースとの差の 30% を取り込む（中くらいの伝播）。
-	const float spreadFactor = 0.3f;
-	float neighborAvg = AverageNeighborSatisfaction(x, z, 1);
-	if (neighborAvg >= 0.0f) { // 近所に住宅があるときだけ
+	// ── 2段目：近所づきあい（満足度の周囲伝播エフェクト） ──
+	// 周りの住宅街が裕福・快適であればつられて治安や価値が上昇し、周囲が荒れていると自分も引っ張られる現象を模倣
+	const float spreadFactor = 0.3f;                          // 伝播の吸い寄せ強度（30%）
+	float neighborAvg = AverageNeighborSatisfaction(x, z, 1); // 隣接住宅の平均スコア
+
+	if (neighborAvg >= 0.0f) {
+		// 近所に他の住宅がある場合のみ、立地ベース値(s)と近所平均の差分の30%分だけ自分の満足度を引き寄せる
 		s += (neighborAvg - s) * spreadFactor;
 	}
 
-	// 0〜100にクランプ
+	// 計算結果がマイナスになったり100をオーバーしたりしないように0.0〜100.0の間へクランプして保存
 	cell.satisfaction = std::max(0.0f, std::min(100.0f, s));
 }
 
-// ══════════════════════════════════════
-// ★ 町への寄与度の計算（ヒートマップ色分け用）
-//
-// influence を -1.0〜+1.0 に正規化して各セルに持たせる。
-//   +1 に近い（良い）：住みやすい住宅、好影響を与える公園など
-//   -1 に近い（悪い）：孤立した住宅、公害源の工業など
-//
-// 「悪い色のセル」を指して、周囲の建物から理由を説明できるようにするのが目的。
-// ══════════════════════════════════════
-void CellAutomaton::UpdateInfluence(int x, int z) {
-	Cell& cell = grid_[x][z];
-
-	switch (cell.type) {
-	case CellType::RESIDENTIAL:
-		// 住宅：自分の満足度をそのまま -1〜+1 にマップ（50を中立0とする）
-		cell.influence = (cell.satisfaction - 50.0f) / 50.0f;
-		break;
-
-	case CellType::PARK:
-		// 公園：周囲に良い影響。近くに住宅が多いほど貢献度が高い。
-		cell.influence = 0.5f + std::min(0.5f, CountNearbyType(x, z, CellType::RESIDENTIAL, 2) * 0.1f);
-		break;
-
-	case CellType::INDUSTRIAL:
-		// 工業：周囲に悪い影響（公害）。近くに住宅が多いほど害が大きい。
-		cell.influence = -0.5f - std::min(0.5f, CountNearbyType(x, z, CellType::RESIDENTIAL, 3) * 0.15f);
-		break;
-
-	case CellType::COMMERCIAL:
-		// 商業：軽い好影響（便利さ）。
-		cell.influence = 0.3f;
-		break;
-
-	case CellType::ROAD:
-		// 道路：中立。
-		cell.influence = 0.0f;
-		break;
-
-	default:
-		cell.influence = 0.0f;
-		break;
-	}
-
-	cell.influence = std::max(-1.0f, std::min(1.0f, cell.influence));
-}
-
-// ★ 寄与度を段階別テクスチャに変換
-//    住宅のみ満足度で色分け（5段階）。空きマスは白、住宅以外の建物は黒。
-//    住宅：悪い ←─────────────────→ 良い
-//          [紫]    [赤]    [白]    [黄緑]   [緑]
-//         <=-0.6  <-0.1  <=0.3   <=0.65   それ以上
-uint32_t CellAutomaton::InfluenceToTexture(const Cell& cell) {
-	// 空きマスは白
-	if (cell.type == CellType::EMPTY)
-		return heatEmpty_;
-
-	// 住宅以外の建物（道路・商業・工業・公園）は黒
-	if (cell.type != CellType::RESIDENTIAL)
-		return heatOther_;
-
-	float v = cell.influence;
-	if (v <= -0.6f)
-		return heatStrongBad_; // 強い悪影響
-	else if (v < -0.1f)
-		return heatBad_; // 悪影響
-	else if (v <= 0.3f)
-		return heatNeutral_; // 中立
-	else if (v <= 0.65f)
-		return heatGood_; // やや好影響
-	else
-		return heatVeryGood_; // 強い好影響
-}
-
-// 住宅の人口を更新
-// ★ 満足度がそのまま「目標人口」を決める。
-//    満足度0なら人口0、満足度100なら最大人口。
-//    立地の良し悪し（道路・公園・商業・工業）は
-//    すべて満足度に集約されているので、ここはシンプル。
+/// <summary>
+/// 【重要論理】住宅セルの人口動態の決定。上記で求めた「住民満足度」に基づいて人口が自律増減する。
+/// </summary>
 void CellAutomaton::SimulateResidential(int x, int z) {
 	Cell& cell = grid_[x][z];
 
-	int maxPop = 100 * (cell.level + 1);
+	int maxPop = 100 * (cell.level + 1); // 1マスあたりの最大収容人口の上限（現在はレベル0なので上限100人）
 	float sat = cell.satisfaction;
 
-	// ★ 満足度で直接増減（目標人口方式をやめる）
-	//   満足度70以上  → 人口増加（上限はmaxPop）
-	//   満足度40〜70  → 変化なし
-	//   満足度20〜40  → 人口減少（遅め）
-	//   満足度20以下  → 人口急減
+	// 満足度の段階に応じて、目標値への収束ではなく、毎ターン連続して増減を起こす動的変動システム
 	if (sat >= 70.f) {
-		int gain = static_cast<int>((sat - 70.f) / 10.f) + 1; // +1〜+4
-		cell.population = std::min(maxPop, cell.population + gain);
+		// 満足度70以上の超快適な街：毎ターン1〜4人ずつ人口が流入・引っ越してくる
+		int gain = static_cast<int>((sat - 70.f) / 10.f) + 1;
+		cell.population = std::min(maxPop, cell.population + gain); // 上限100人でストップ
 	} else if (sat >= 40.f) {
-		// 現状維持
+		// 満足度40〜70の普通の街：人口は現状維持で安定
 	} else if (sat >= 20.f) {
-		int loss = static_cast<int>((40.f - sat) / 10.f) + 1; // -1〜-3
+		// 満足度20〜40のやや不快な街：不満により毎ターン1〜3人ずつ住民が家を出ていく（人口減少）
+		int loss = static_cast<int>((40.f - sat) / 10.f) + 1;
 		cell.population = std::max(0, cell.population - loss);
 	} else {
-		// 満足度20以下：急減
-		int loss = static_cast<int>((20.f - sat) / 4.f) + 3; // -3〜-8
+		// 満足度20以下の劣悪な街（インフラ寸断や公害直撃）：毎ターン3〜8人ペースで住民が逃げ出す（過疎化・ゴーストタウン化）
+		int loss = static_cast<int>((20.f - sat) / 4.f) + 3;
 		cell.population = std::max(0, cell.population - loss);
 	}
 
-	// ★ 住宅は収入を出さない（人口を生む場所に専念）。
-	//    収入源は商業・工業に集約する。
+	// 住宅自体は直接税金を納めない仕様（人口を集めることに特化）
 	cell.income = 0.0f;
 }
 
-// 商業施設の収入を更新
-// ★ 住民が客。近隣（半径4）の住宅人口が多いほど儲かる。道路接続が必須。
-//    ただし1施設が捌ける客数には上限（キャパ）がある＝青天井ではない。
-//    近隣に工業があるとキャパが上がる（仕入れ能力UP）＝工業との連携。
+/// <summary>
+/// 【重要論理】商業セルの経営シミュレーション。近隣の住宅人口を吸い上げて売上にする。
+/// </summary>
 void CellAutomaton::SimulateCommercial(int x, int z) {
 	Cell& cell = grid_[x][z];
 
-	// 道路に繋がっていないと客が来ない＝稼働ゼロ
+	// 商業地が道路に面していない場合、仕入れも客の来店もできないため、稼働度および売上は完全ゼロになる
 	if (!IsAdjacentToRoad(x, z)) {
 		cell.population = 0;
 		cell.income = 0.0f;
 		return;
 	}
 
-	// 近隣の住宅人口を「客の数」とみなして集計
+	// 周辺半径4マス以内に居住している「住宅セルの住民人口の合計」を計算し、潜在顧客数（customers）とする
 	int customers = 0;
 	const int radius = 4;
-	for (int dx = -radius; dx <= radius; ++dx)
+	for (int dx = -radius; dx <= radius; ++dx) {
 		for (int dz = -radius; dz <= radius; ++dz) {
 			if (dx == 0 && dz == 0)
 				continue;
@@ -298,77 +254,142 @@ void CellAutomaton::SimulateCommercial(int x, int z) {
 			if (grid_[nx][nz].type == CellType::RESIDENTIAL)
 				customers += grid_[nx][nz].population;
 		}
+	}
 
-	// ★ 天井：1施設が捌ける基本キャパ
+	// お店が一度に捌くことができる「基本キャパシティ（店員の限界数）」を設定（レベル0なら上限200人）
 	float capacity = 200.0f * (cell.level + 1);
 
-	// ★ 工業連携：近隣（半径4）の工業1つにつきキャパ+50%、最大+150%
+	// 産業シナジー：半径4マスの中に工業（工場）があると、商品の仕入れ能力が上がり店が活性化すると見なす
+	// 工場1つあたりキャパシティ上限が+50%され、最大+150%（4倍近くの客を捌けるメガストア化）まで拡張される
 	int factories = CountNearbyType(x, z, CellType::INDUSTRIAL, radius);
 	float boost = 1.0f + std::min(1.5f, factories * 0.5f);
 	capacity *= boost;
 
-	// 実際に捌ける客数はキャパで頭打ち
+	// 潜在顧客がどれだけ多くても、お店の限界キャパシティで頭打ち（制限）される
 	int served = std::min(customers, static_cast<int>(capacity));
 
-	// 捌いた客数を稼働度(population)として保持（Cell Info表示・デバッグ用）
+	// 実際に接客した客の数を、セルの稼働パラメータ（population）に保存してUIから覗けるようにする
 	cell.population = served;
 
-	// ★ 収入：捌いた客1人あたり 0.15 × 老朽化効率
+	// 商業収入の確定：捌いた客1人あたり$0.15の利益。ここに「経年老朽化による効率倍率」を乗算して最終売上とする
 	cell.income = served * 0.15f * AgeEfficiency(cell.age);
 }
 
-// 工業施設の収入を更新
-// ★ 住民は不要。道路接続さえあれば住民数に関係なく安定して稼ぐ。
-//    代わりに周囲へ公害（UpdateSatisfactionで住宅の満足度を-30/個）を撒く。
-//    → 住宅から離して置く必要がある。「稼ぎたいが街を汚す」ジレンマ。
+/// <summary>
+/// 【重要論理】工業セルの経営シミュレーション。住民に関係なく安定稼ぐが、周囲を汚染する。
+/// </summary>
 void CellAutomaton::SimulateIndustrial(int x, int z) {
 	Cell& cell = grid_[x][z];
 
-	// 道路に繋がっていないと出荷できない＝稼働ゼロ
+	// 道路がないと製品を都市外へ出荷できないため操業不能（売上ゼロ）
 	if (!IsAdjacentToRoad(x, z)) {
 		cell.population = 0;
 		cell.income = 0.0f;
 		return;
 	}
 
-	// 住民数に関係なく、レベルに応じた固定の生産量
+	// 工場は労働者人口の有無を問わず、インフラさえあれば一定の生産力を発揮する（レベル0なら固定出力30）
 	int baseOutput = 30 * (cell.level + 1);
-	cell.population = baseOutput; // 稼働度として保持（表示用）
-	// ★ 収入：1ユニット0.4 × 老朽化効率
+	cell.population = baseOutput; // 表示用に操業出力を記録
+
+	// 工業収入の確定：生産量1あたり$0.4の安定した高利益を叩き出す。ただし商業同様に老朽化効率の影響を受ける
 	cell.income = baseOutput * 0.4f * AgeEfficiency(cell.age);
 }
+
+/// <summary>
+/// 都市全体の平均満足度の算出（ImGuiダッシュボードのメインメーター用）。
+/// </summary>
 float CellAutomaton::GetAverageSatisfaction() const {
 	float total = 0.0f;
 	int count = 0;
-	for (int x = 0; x < GRID_SIZE; ++x)
-		for (int z = 0; z < GRID_SIZE; ++z)
+	for (int x = 0; x < GRID_SIZE; ++x) {
+		for (int z = 0; z < GRID_SIZE; ++z) {
 			if (grid_[x][z].type == CellType::RESIDENTIAL) {
-				total += grid_[x][z].satisfaction;
+				total += grid_[x][z].satisfaction; // 住宅のみの満足度を加算
 				count++;
 			}
-	return count > 0 ? total / count : 0.0f;
+		}
+	}
+	return count > 0 ? total / count : 0.0f; // 都市に住宅が1つもない場合は0%とする
 }
 
-// 全セルのシミュレーションを1ステップ実行
+/// <summary>
+/// ヒートマップ可視化用の寄与度パラメーターの計算。全セルの状態を-1.0(最悪)〜+1.0(最高)の範囲に落とし込む。
+/// </summary>
+void CellAutomaton::UpdateInfluence(int x, int z) {
+	Cell& cell = grid_[x][z];
+
+	switch (cell.type) {
+	case CellType::RESIDENTIAL:
+		// 住宅：自身の住民満足度(0〜100)を、50を中立(0.0)とする-1.0〜+1.0の範囲に線形マップ
+		cell.influence = (cell.satisfaction - 50.0f) / 50.0f;
+		break;
+
+	case CellType::PARK:
+	case CellType::INDUSTRIAL:
+	case CellType::COMMERCIAL:
+	case CellType::ROAD:
+	default:
+		cell.influence = 0.0f;
+		break;
+	}
+
+	// 念のため-1.0〜+1.0の範囲をはみ出さないように安全ガード
+	cell.influence = std::max(-1.0f, std::min(1.0f, cell.influence));
+}
+
+/// <summary>
+/// 計算されたInfluence(影響度)の値を、5段階の視覚的なヒートマップ用単色テクスチャに紐付ける。
+/// </summary>
+uint32_t CellAutomaton::InfluenceToTexture(const Cell& cell) {
+	if (cell.type == CellType::EMPTY)
+		return heatEmpty_; // さら地は一律で「白」
+	if (cell.type != CellType::RESIDENTIAL)
+		return heatOther_; // 住宅以外のすべての建物は、地図の骨格として「黒」でマスク
+
+	// ── 以下、住宅セルの満足度に応じたカラーマップの割り当て ──
+	float v = cell.influence;
+	if (v <= -0.6f)
+		return heatStrongBad_; // 紫：スラム街・最悪環境
+	else if (v < -0.1f)
+		return heatBad_; // 赤：道路が途絶えたか公害が隣接して不満
+	else if (v <= 0.3f)
+		return heatNeutral_; // 白：可もなく不可もない普通の家
+	else if (v <= 0.65f)
+		return heatGood_; // 黄緑：公園やお店が近くにあって快適
+	else
+		return heatVeryGood_; // 緑：最高のロケーションを誇る高級住宅街
+}
+
+/// <summary>
+/// 【最重要シミュレーション進行ループ】シミュレーションタイマーが満期を迎えた瞬間に、都市全体の時間を1ステップ進める。
+/// </summary>
 void CellAutomaton::RunSimulation() {
-	// 満足度を前ターン値としてスナップショット
-	for (int x = 0; x < GRID_SIZE; ++x)
-		for (int z = 0; z < GRID_SIZE; ++z)
+	// 【前処理】現在の満足度を伝播計算用の参照バッファ(prevSatisfaction_)へ一斉に全コピー（スナップショット撮影）
+	for (int x = 0; x < GRID_SIZE; ++x) {
+		for (int z = 0; z < GRID_SIZE; ++z) {
 			prevSatisfaction_[x][z] = grid_[x][z].satisfaction;
+		}
+	}
 
-	// ★ 建物の築年数を1ターン分進める（空き地は対象外）
-	for (int x = 0; x < GRID_SIZE; ++x)
-		for (int z = 0; z < GRID_SIZE; ++z)
-			if (grid_[x][z].type != CellType::EMPTY)
+	// 1. さら地以外のすべての建物の築年数（age）を+1ターン増やす
+	for (int x = 0; x < GRID_SIZE; ++x) {
+		for (int z = 0; z < GRID_SIZE; ++z) {
+			if (grid_[x][z].type != CellType::EMPTY) {
 				grid_[x][z].age++;
+			}
+		}
+	}
 
-	// 満足度を更新
-	for (int x = 0; x < GRID_SIZE; ++x)
-		for (int z = 0; z < GRID_SIZE; ++z)
+	// 2. 全マスの新しい「満足度」を確定（前ターンの周囲データを読むため、計算の走査順に依存しない）
+	for (int x = 0; x < GRID_SIZE; ++x){
+		for (int z = 0; z < GRID_SIZE; ++z) {
 			UpdateSatisfaction(x, z);
+		}
+	}
 
-	// 人口を更新
-	for (int x = 0; x < GRID_SIZE; ++x)
+	// 3. 確定した新しい満足度を基準にして、各建物の「人口増減」「商業売上」「工業生産」を順次計算
+	for (int x = 0; x < GRID_SIZE; ++x) {
 		for (int z = 0; z < GRID_SIZE; ++z) {
 			switch (grid_[x][z].type) {
 			case CellType::RESIDENTIAL:
@@ -384,37 +405,48 @@ void CellAutomaton::RunSimulation() {
 				break;
 			}
 		}
+	}
 
-	// 寄与度を更新（ヒートマップ用）
-	for (int x = 0; x < GRID_SIZE; ++x)
-		for (int z = 0; z < GRID_SIZE; ++z)
+	// 4. 計算が終わった最終ステータスから、ヒートマップ用の街への影響度を再計算
+	for (int x = 0; x < GRID_SIZE; ++x) {
+		for (int z = 0; z < GRID_SIZE; ++z) {
 			UpdateInfluence(x, z);
+		}
+	}
 
-	// ★ このターンの総収入を集計（商業・工業の内訳も取る）
-	float income = 0.0f;
-	float comIncome = 0.0f, indIncome = 0.0f;
-	float maintenance = 0.0f; // ★ 維持費の合計
-	for (int x = 0; x < GRID_SIZE; ++x)
+	// 5. 【財政集計】都市全域の経済活動の売上と、建物の維持費を集計する
+	float income = 0.0f; // 全体の売上総額を蓄積する変数
+
+	float comIncome = 0.0f, indIncome = 0.0f; // 商業と工業の売上を個別に集計する変数
+	float maintenance = 0.0f;                 // 建物の維持費総額を蓄積する変数
+
+	for (int x = 0; x < GRID_SIZE; ++x) {
 		for (int z = 0; z < GRID_SIZE; ++z) {
 			Cell& c = grid_[x][z];
-			income += c.income;
+			income += c.income; // 個別セルの売上を全体売上に加算
+
 			if (c.type == CellType::COMMERCIAL)
 				comIncome += c.income;
 			else if (c.type == CellType::INDUSTRIAL)
 				indIncome += c.income;
-			// ★ 建物ごとの維持費を加算（空き地は0）
+
+			// 建物固有の維持費をインライン構造体から取得して合算
 			maintenance += GetBuildingCost(c.type).maintCost;
 		}
+	}
 
-	// ★ 純収益 = 総収入 - 維持費。これを残高に反映する（赤字なら残高が減る）
+	// 今回のターンの国家の「純利益（売上総額 - 維持費総額）」を算出。赤字ならマイナス値になる
 	float net = income - maintenance;
 
-	lastTurnIncome_ = income; // 表示用
+	// UI表示ウィンドウ用に数値を一時退避して記憶
+	lastTurnIncome_ = income;
 	lastTurnMaintenance_ = maintenance;
 	lastTurnNet_ = net;
-	pendingIncome_ += net; // ★ 回収待ちには純収益を積む
 
-	// ★ 収入ログに記録
+	// GameSceneクラスがCollectIncome()を呼び出して国庫に回収しに来るまで、未回収バッファに利益をプール
+	pendingIncome_ += net;
+
+	// 6. 【ログ記録】ImGuiの推移グラフウィンドウに表示するため、末尾に最新データをプッシュ
 	IncomeLogEntry incEntry;
 	incEntry.total = income;
 	incEntry.commercial = comIncome;
@@ -422,29 +454,29 @@ void CellAutomaton::RunSimulation() {
 	incEntry.maintenance = maintenance;
 	incEntry.net = net;
 	incomeLog_.push_back(incEntry);
-	if ((int)incomeLog_.size() > MAX_LOG)
-		incomeLog_.erase(incomeLog_.begin());
 
-	// ★ 人口ログに記録
+	if ((int)incomeLog_.size() > MAX_LOG)
+		incomeLog_.erase(incomeLog_.begin()); // 20件を越えた古いログはメモリ節約のため先頭から削除
+
+	// 人口動態ログの記録
 	int currentPop = GetTotalPopulation();
 	PopLogEntry entry;
 	entry.total = currentPop;
-	entry.delta = currentPop - prevTotalPop_;
-	prevTotalPop_ = currentPop;
+	entry.delta = currentPop - prevTotalPop_; // 今回の人口 - 前回の人口 = 増減数
+	prevTotalPop_ = currentPop;               // 次回計算用に保存
 	popLog_.push_back(entry);
+
 	if ((int)popLog_.size() > MAX_LOG)
 		popLog_.erase(popLog_.begin());
 }
 
-// ══════════════════════════════════════
-// 統計
-// ══════════════════════════════════════
-
+/// <summary>
+/// 都市全域の「住宅セル」の人口のみを足し合わせて、総人口を返す。
+/// </summary>
 int CellAutomaton::GetTotalPopulation() const {
 	int total = 0;
 	for (int x = 0; x < GRID_SIZE; ++x) {
 		for (int z = 0; z < GRID_SIZE; ++z) {
-			// ★ 住宅（RESIDENTIAL）の人口だけを合計する
 			if (grid_[x][z].type == CellType::RESIDENTIAL) {
 				total += grid_[x][z].population;
 			}
@@ -453,40 +485,40 @@ int CellAutomaton::GetTotalPopulation() const {
 	return total;
 }
 
-// ══════════════════════════════════════
-// Update / Draw
-// ══════════════════════════════════════
-
+/// <summary>
+/// 毎フレームのUpdate。シミュレーション有効時のみタイマーを秒単位で進め、指定インターバルに達したらRunSimulationを実行する。
+/// </summary>
 void CellAutomaton::Update(float deltaTime) {
 	if (!enableSimulation_)
-		return;
+		return; // チェックボックスでシミュレーションが停止していれば何もしない
 
-	simTimer_ += deltaTime;
+	simTimer_ += deltaTime; // 60FPSなら約0.0166秒ずつ加算
 	if (simTimer_ >= simInterval_) {
-		simTimer_ = 0.0f;
-		RunSimulation();
+		simTimer_ = 0.0f; // タイマーをリセット
+		RunSimulation();  // 1ターン時計を進める
 	}
 }
 
-void CellAutomaton::MoveCursor(int dx, int dz) {
-	cursorX_ = std::max(0, std::min(GRID_SIZE - 1, cursorX_ + dx));
-	cursorZ_ = std::max(0, std::min(GRID_SIZE - 1, cursorZ_ + dz));
-}
-
+/// <summary>
+/// プレイヤーが建物を新しく建てた、または壊した際のデータグリッド書き換え処理。
+/// </summary>
 void CellAutomaton::PlaceCell(int x, int z, CellType type) {
-	if (x < 0 || x >= GRID_SIZE || z < 0 || z >= GRID_SIZE)
-		return;
+	if (x < 0 || x >= GRID_SIZE || z < 0 || z >= GRID_SIZE) {
+		return; // グリッド外の誤作動ガード
+	}
+
+
+	// 新しい建物種別の上書きと、付随する個別ステータスの完全初期化
 	grid_[x][z].type = type;
 	grid_[x][z].level = 0;
 	grid_[x][z].population = 0;
 	grid_[x][z].income = 0.0f;
-	grid_[x][z].satisfaction = 50.0f; // ★ 配置時に満足度を初期化
-	grid_[x][z].influence = 0.0f;     // ★ 寄与度も初期化
-	grid_[x][z].age = 0;              // ★ 築年数リセット（建て替えで若返る）
+	grid_[x][z].satisfaction = 50.0f; // 新築時の標準満足度は50%
+	grid_[x][z].influence = 0.0f;
+	grid_[x][z].age = 0; // 建て替えにより築年数が0に若返り、老朽化による収入減退ペナルティが完全リセットされる
 }
 
 void CellAutomaton::PlaceCellAtCursor(CellType type) { PlaceCell(cursorX_, cursorZ_, type); }
-
 void CellAutomaton::RemoveCell(int x, int z) { PlaceCell(x, z, CellType::EMPTY); }
 
 Cell* CellAutomaton::GetCell(int x, int z) {
@@ -495,12 +527,19 @@ Cell* CellAutomaton::GetCell(int x, int z) {
 	return &grid_[x][z];
 }
 
-void CellAutomaton::DrawCursor(KamataEngine::PrimitiveDrawer* drawer) {
+// =================================================================
+// グラフィックス・描画制御部分
+// =================================================================
+
+/// <summary>
+/// 選択中のマスを囲う白い枠線と、建物が存在する場合に近隣8マスを黄色く強調するデバッグ用グリッドアート。
+/// </summary>
+void CellAutomaton::DrawCursor(PrimitiveDrawer* drawer) {
 	if (!drawer)
 		return;
-	const float y = 0.1f;
+	const float y = 0.1f; // 地面の線(Y=0.05)と被らないようにわずかに上に浮かせて描画
 
-	// カーソル：白枠
+	// カーソルがあるマス(1x1)を白線で囲う
 	float cx0 = static_cast<float>(cursorX_), cx1 = cx0 + 1.0f;
 	float cz0 = static_cast<float>(cursorZ_), cz1 = cz0 + 1.0f;
 	KamataEngine::Vector4 white = {1, 1, 1, 1};
@@ -509,19 +548,20 @@ void CellAutomaton::DrawCursor(KamataEngine::PrimitiveDrawer* drawer) {
 	drawer->DrawLine3d({cx1, y, cz1}, {cx0, y, cz1}, white);
 	drawer->DrawLine3d({cx0, y, cz1}, {cx0, y, cz0}, white);
 
-	// 建物があるとき：隣接8セルを黄色枠
+	// カーソル下に何かしらの建物が建っている場合、影響範囲の視覚化として「周囲8マス」を黄色い枠線で包み込む
 	Cell* c = GetCell(cursorX_, cursorZ_);
 	if (!c || c->type == CellType::EMPTY)
 		return;
 
-	KamataEngine::Vector4 yellow = {1, 1, 0, 1};
-	for (int dx = -1; dx <= 1; ++dx)
+	Vector4 yellow = {1, 1, 0, 1};
+	for (int dx = -1; dx <= 1; ++dx) {
 		for (int dz = -1; dz <= 1; ++dz) {
 			if (dx == 0 && dz == 0)
 				continue;
 			int nx = cursorX_ + dx, nz = cursorZ_ + dz;
 			if (nx < 0 || nx >= GRID_SIZE || nz < 0 || nz >= GRID_SIZE)
 				continue;
+
 			float x0 = static_cast<float>(nx), x1 = x0 + 1.0f;
 			float z0 = static_cast<float>(nz), z1 = z0 + 1.0f;
 			drawer->DrawLine3d({x0, y, z0}, {x1, y, z0}, yellow);
@@ -529,89 +569,104 @@ void CellAutomaton::DrawCursor(KamataEngine::PrimitiveDrawer* drawer) {
 			drawer->DrawLine3d({x1, y, z1}, {x0, y, z1}, yellow);
 			drawer->DrawLine3d({x0, y, z1}, {x0, y, z0}, yellow);
 		}
+	}
 }
 
-// ★ 通常描画：3Dの建物
+/// <summary>
+/// 通常モードの3D都市レンダリング。建物の種類に基づいてモデルの「高さ（Y軸スケール）」や幅を変更し、ビル群のシルエットを作る。
+/// </summary>
 void CellAutomaton::DrawNormal() {
 	for (int x = 0; x < GRID_SIZE; ++x) {
 		for (int z = 0; z < GRID_SIZE; ++z) {
 			Cell& cell = grid_[x][z];
-			KamataEngine::WorldTransform* t = cell.worldTransform_;
+			WorldTransform* t = cell.worldTransform_;
+
+			// マスのインデックス(0〜29)の中心位置(0.5ずらす)を3DのX,Z座標へマッピング
 			t->translation_.x = static_cast<float>(x) + 0.5f;
 			t->translation_.z = static_cast<float>(z) + 0.5f;
 
+			// さら地の場合は、地面にぴったり吸い付いた平たい緑の絨毯タイルとして描く
 			if (cell.type == CellType::EMPTY) {
 				t->translation_.y = 0.0f;
 				t->scale_ = {0.5f, 0.02f, 0.5f};
-				WorldTransformUpdate(*t);
+				WorldTransformUpdate(*t); // 行列計算を反映
 				cellModel_->Draw(*t, *camera_, groundTexture_);
 				continue;
 			}
 
+			// 建物ごとに高さを変えて都市の凹凸を表現する
 			float height = 0.5f, scaleXZ = 0.45f;
 			switch (cell.type) {
 			case CellType::ROAD:
-				height = 0.05f;
-				scaleXZ = 0.5f;
+				height = 0.05f; // 道路は床にへばりつく薄いアスファルト板
+				scaleXZ = 0.5f; // マス目いっぱいに広げる
 				break;
 			case CellType::RESIDENTIAL:
-				height = 0.6f + cell.level * 0.5f;
+				height = 0.6f + cell.level * 0.5f; // 普通の高さの家
 				scaleXZ = 0.44f;
 				break;
 			case CellType::COMMERCIAL:
-				height = 0.9f + cell.level * 0.7f;
-				scaleXZ = 0.40f;
+				height = 0.9f + cell.level * 0.7f; // 商業ビルは少し高層化する
+				scaleXZ = 0.40f;                   // 少しスタイリッシュに細身にする
 				break;
 			case CellType::INDUSTRIAL:
-				height = 0.7f + cell.level * 0.5f;
+				height = 0.7f + cell.level * 0.5f; // 重厚感のある工場
 				scaleXZ = 0.44f;
 				break;
 			case CellType::PARK:
-				height = 0.1f;
+				height = 0.1f; // 公園は緑地の少し高くなった広場
 				scaleXZ = 0.48f;
 				break;
 			default:
 				break;
 			}
 
-			t->translation_.y = height;
-			t->scale_ = {scaleXZ, height, scaleXZ};
+			t->translation_.y = height;             // 立方体モデルの中心点のY座標を高さに合わせる
+			t->scale_ = {scaleXZ, height, scaleXZ}; // スケールを適用して縦長のボックスに変形
 			WorldTransformUpdate(*t);
+
+			// 登録された建物の単色カラーテクスチャを貼り付けてポリゴンを描画
 			cellModel_->Draw(*t, *camera_, textureHandles_[cell.type]);
 		}
 	}
 }
 
-// ★ ヒートマップ描画：建物を隠し、床に平たいタイルを敷いて寄与度の色で塗る
-//    真上から見ると、街全体の「良し悪しの地図」になる。
+/// <summary>
+/// ヒートマップモードの2Dカラーグリッドレンダリング。すべての建物の高さを潰し、地面すれすれに寄与度の色タイルを敷き詰める。
+/// </summary>
 void CellAutomaton::DrawHeatmap() {
 	for (int x = 0; x < GRID_SIZE; ++x) {
 		for (int z = 0; z < GRID_SIZE; ++z) {
 			Cell& cell = grid_[x][z];
 			KamataEngine::WorldTransform* t = cell.worldTransform_;
+
 			t->translation_.x = static_cast<float>(x) + 0.5f;
 			t->translation_.z = static_cast<float>(z) + 0.5f;
-			t->translation_.y = 0.02f;       // 床すれすれ
-			t->scale_ = {0.5f, 0.02f, 0.5f}; // 平たいタイル（建物は描かない）
+			t->translation_.y = 0.02f;       // 地面すれすれの位置に固定
+			t->scale_ = {0.5f, 0.02f, 0.5f}; // 全て等しく完全に平坦な正方形タイル化（高さを潰す）
 
 			WorldTransformUpdate(*t);
+			// 影響度に応じたテクスチャ色(InfluenceToTexture)を選択して床を塗りつぶす
 			cellModel_->Draw(*t, *camera_, InfluenceToTexture(cell));
 		}
 	}
 }
 
+/// <summary>
+/// 外部から呼ばれるメイン描画エントリ。モードに応じた描画ルーチンを呼び分け、最後にプレイヤー用の黄色いカーソルを重畳する。
+/// </summary>
 void CellAutomaton::Draw(KamataEngine::PrimitiveDrawer* drawer) {
 	if (!cellModel_ || !camera_)
 		return;
 
-	// ★ 表示モードで描画を切り替え
+	// モード選択フラグによる関数のスイッチング
 	if (displayMode_ == DisplayMode::Heatmap) {
-		DrawHeatmap();
+		DrawHeatmap(); // ヒートマップ地図を描画
 	} else {
-		DrawNormal();
+		DrawNormal(); // 通常の3Dビル街を描画
 	}
 
-	// カーソル（どちらのモードでも表示）
+	// ── プレイヤーが操作するフォーカスカーソルの立体描画（半透明の白い浮遊キューブ） ──
 	cursorWorldTransform_.translation_.x = static_cast<float>(cursorX_) + 0.5f;
 	cursorWorldTransform_.translation_.z = static_cast<float>(cursorZ_) + 0.5f;
 	cursorWorldTransform_.translation_.y = 0.04f;
@@ -619,5 +674,15 @@ void CellAutomaton::Draw(KamataEngine::PrimitiveDrawer* drawer) {
 	WorldTransformUpdate(cursorWorldTransform_);
 	cellModel_->Draw(cursorWorldTransform_, *camera_, cursorTexture_);
 
+	// カーソルの四角い白枠・黄色枠線群をPrimitiveDrawerを使って重ね書き
 	DrawCursor(drawer);
+}
+
+/// <summary>
+/// 会計処理：GameSceneに未回収資金を引き渡し、二重受け取りを完全に防ぐためにプールをゼロに戻す。
+/// </summary>
+float CellAutomaton::CollectIncome() {
+	float v = pendingIncome_;
+	pendingIncome_ = 0.0f; // バッファのクリア
+	return v;              // 溜まっていた純収益を返却
 }
