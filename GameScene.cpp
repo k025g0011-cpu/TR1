@@ -165,12 +165,12 @@ void GameScene::Update() {
 	// 財政セクション
 	ImGui::Text("=== Finance ===");
 	ImGui::TextColored(ImVec4(1, 1, 0, 1), "Balance: $%.0f", cityBalance_);       // 現在の国家予算
-	ImGui::Text("Income/turn:  $%.1f", cellAutomaton_->GetLastTurnIncome());      // 前ターンの総収入
-	ImGui::Text("Upkeep/turn:  $%.1f", cellAutomaton_->GetLastTurnMaintenance()); // 前ターンの総維持費
+	//ImGui::Text("Income/turn:  $%.1f", cellAutomaton_->GetLastTurnIncome());      // 前ターンの総収入
+	//ImGui::Text("Upkeep/turn:  $%.1f", cellAutomaton_->GetLastTurnMaintenance()); // 前ターンの総維持費
 	{
 		float net = cellAutomaton_->GetLastTurnNet(); // 純収支（黒字ならプラス、赤字ならマイナス表記）
 		ImVec4 netCol = net > 0.0f ? ImVec4(0, 1, 0, 1) : net < 0.0f ? ImVec4(1, 0.3f, 0.3f, 1) : ImVec4(0.8f, 0.8f, 0.8f, 1);
-		ImGui::TextColored(netCol, "Net/turn:     $%+.1f", net);
+		//ImGui::TextColored(netCol, "Net/turn:     $%+.1f", net);
 	}
 	if (cityBalance_ <= 0.0f)
 		ImGui::TextColored(ImVec4(1, 0, 0, 1), "No funds! (財政破綻状態)");
@@ -226,14 +226,14 @@ void GameScene::Update() {
 	if (incLog.empty()) {
 		ImGui::TextDisabled("No data. Enable Simulation.");
 	} else {
-		ImGui::Text("Turn  Com    Ind    Upkeep  Net");
+		ImGui::Text("Turn  Com  Upkeep  Net");
 		ImGui::Separator();
 		int shownInc = 0;
 		// 最新のログから遡って最大15件表示
 		for (int i = (int)incLog.size() - 1; i >= 0 && shownInc < 15; --i, ++shownInc) {
 			const IncomeLogEntry& e = incLog[i];
 			ImVec4 col = e.net > 0.0f ? ImVec4(0, 1, 0, 1) : e.net < 0.0f ? ImVec4(1, 0.3f, 0.3f, 1) : ImVec4(0.6f, 0.6f, 0.6f, 1);
-			ImGui::TextColored(col, "T-%2d  %-5.0f  %-5.0f  %-6.0f  %+.0f", (int)incLog.size() - i, e.commercial, e.industrial, e.maintenance, e.net);
+			ImGui::TextColored(col, "T-%2d  %-5.0f  %-6.0f  %+.0f", (int)incLog.size() - i, e.commercial, e.maintenance, e.net);
 		}
 	}
 	ImGui::End();
@@ -313,21 +313,21 @@ void GameScene::Update() {
 			} else {
 				ImGui::Text("Customer/Output: %d", cell->population);
 			}
-			ImGui::Text("maintenance/turn: $%.1f", GetBuildingCost(cell->type).maintCost);
+			//ImGui::Text("maintenance/turn: $%.1f", GetBuildingCost(cell->type).maintCost);
 
 			// 商業・工業に特有の「経営データ（収入と経年劣化）」の表示
 			if (cell->type == CellType::COMMERCIAL || cell->type == CellType::INDUSTRIAL) {
-				ImGui::Text("Income/turn: $%.1f", cell->income);
+				//ImGui::Text("Income/turn: $%.1f", cell->income);
 
 				// 老朽化に伴う生産・集客効率の減退率を算出
 				float eff = cellAutomaton_->GetAgeEfficiency(cell->age);
 				ImVec4 effCol = eff >= 0.99f ? ImVec4(0, 1, 0, 1) : eff >= 0.6f ? ImVec4(1, 1, 0, 1) : ImVec4(1, 0.3f, 0.3f, 1);
 				ImGui::Text("Age: %d turns", cell->age);
 				ImGui::TextColored(effCol, "Efficiency: %.0f%%", eff * 100.0f);
-				if (eff < 0.99f)
-					ImGui::TextDisabled("  (劣化中: 0キーで撤去して再建するとリセットされます)");
+				
 			}
 
+			/*
 			// 商業特有の「工業連携シナジー（仕入れルート補正）」の表示
 			if (cell->type == CellType::COMMERCIAL) {
 				int factories = 0;
@@ -343,7 +343,7 @@ void GameScene::Update() {
 				// 工業1つにつきキャパシティ上限+50% (最大+150%) のボーナス値を可視化
 				ImGui::Text("Nearby factories: %d (+%.0f%% cap)", factories, std::min(1.5f, factories * 0.5f) * 100.0f);
 			}
-
+			*/
 			// 住宅特有の「住民満足度」バー表示
 			if (cell->type == CellType::RESIDENTIAL) {
 				float sat = cell->satisfaction;

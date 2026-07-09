@@ -125,7 +125,7 @@ float CellAutomaton::AgeEfficiency(int age) const {
 	if (age <= AGE_GRACE)
 		return 1.0f; // 20ターン以内であれば100%フル稼働
 
-	// 20ターンを越えた場合、1ターンごとに効率が0.02(2%)ずつ線形減少する
+	// 20ターンを越えた場合、1ターンごとに効率が0.1ずつ減少する
 	float eff = 1.0f - (age - AGE_GRACE) * AGE_DECAY;
 
 	// 最低でも20%の効率（AGE_MIN_EFF）は下回らないように底打ち処理を行う
