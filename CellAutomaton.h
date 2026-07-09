@@ -4,7 +4,8 @@
 #include <unordered_map>
 #include <vector>
 
-enum class CellType { EMPTY, ROAD, RESIDENTIAL, COMMERCIAL, INDUSTRIAL, PARK };
+// 街を構成する4つの要素（+空き地）
+enum class CellType { EMPTY, ROAD, RESIDENTIAL, COMMERCIAL, INDUSTRIAL };
 enum class DisplayMode { Normal, Heatmap };
 
 struct Cell {
@@ -72,7 +73,7 @@ private:
 	void SimulateIndustrial(int x, int z);
 	void UpdateSatisfaction(int x, int z);
 	void UpdateInfluence(int x, int z);
-	void UpdateBuildingLevels(); // 新機能：レベルの更新処理
+	void UpdateBuildingLevels();
 	void RunSimulation();
 
 	// ── 5. 描画処理群 ──

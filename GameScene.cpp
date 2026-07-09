@@ -30,7 +30,6 @@ void GameScene::LoadParameters() {
 		params_.costResidential = j.value("costResidential", params_.costResidential);
 		params_.costCommercial = j.value("costCommercial", params_.costCommercial);
 		params_.costIndustrial = j.value("costIndustrial", params_.costIndustrial);
-		params_.costPark = j.value("costPark", params_.costPark);
 		params_.maintCommercial = j.value("maintCommercial", params_.maintCommercial);
 		params_.maintIndustrial = j.value("maintIndustrial", params_.maintIndustrial);
 		params_.ageGrace = j.value("ageGrace", params_.ageGrace);
@@ -46,7 +45,6 @@ void GameScene::SaveParameters() {
 	    {"costResidential", params_.costResidential},
 	    {"costCommercial",  params_.costCommercial },
 	    {"costIndustrial",  params_.costIndustrial },
-	    {"costPark",        params_.costPark       },
 	    {"maintCommercial", params_.maintCommercial},
 	    {"maintIndustrial", params_.maintIndustrial},
 	    {"ageGrace",        params_.ageGrace       },
@@ -118,8 +116,6 @@ void GameScene::Update() {
 		tryPlace(CellType::COMMERCIAL);
 	if (input_->TriggerKey(DIK_4))
 		tryPlace(CellType::INDUSTRIAL);
-	if (input_->TriggerKey(DIK_5))
-		tryPlace(CellType::PARK);
 	if (input_->TriggerKey(DIK_0))
 		cellAutomaton_->RemoveCell(cx, cz);
 
@@ -167,20 +163,21 @@ void GameScene::Draw() {
 }
 
 // =====================================================================
-// UI構築専用関数（綺麗に整列するように座標指定を追加）
+// UI構築専用関数
 // =====================================================================
 void GameScene::UpdateUI() {
 	ImGuiManager::GetInstance()->Begin();
 
 	auto satColorOf = [](float v) { return v >= 70.0f ? ImVec4(0, 1, 0, 1) : v >= 40.0f ? ImVec4(1, 1, 0, 1) : ImVec4(1, 0, 0, 1); };
-	const char* typeNames[] = {"Empty", "Road", "Residential", "Commercial", "Industrial", "Park"};
+
+	// Park要素を配列から除外して 5要素 に変更
+	const char* typeNames[] = {"Empty", "Road", "Residential", "Commercial", "Industrial"};
 	const ImVec4 typeColors[] = {
 	    {0.5f, 0.5f, 0.5f, 1},
         {0.6f, 0.6f, 0.6f, 1},
         {0.2f, 0.9f, 0.2f, 1},
         {0.2f, 0.2f, 0.9f, 1},
-        {0.9f, 0.6f, 0.1f, 1},
-        {0.1f, 0.8f, 0.1f, 1}
+        {0.9f, 0.6f, 0.1f, 1}
     };
 
 	// ① City Dashboard (左上)
@@ -257,8 +254,8 @@ void GameScene::UpdateUI() {
 	ImGui::TextColored(typeColors[static_cast<int>(currentPlacingType)], "%s", typeNames[static_cast<int>(currentPlacingType)]);
 
 	if (ImGui::CollapsingHeader("Build Costs", ImGuiTreeNodeFlags_DefaultOpen)) {
-		CellType types[] = {CellType::ROAD, CellType::RESIDENTIAL, CellType::COMMERCIAL, CellType::INDUSTRIAL, CellType::PARK};
-		for (int i = 0; i < 5; ++i) {
+		CellType types[] = {CellType::ROAD, CellType::RESIDENTIAL, CellType::COMMERCIAL, CellType::INDUSTRIAL};
+		for (int i = 0; i < 4; ++i) { // 要素を4つに変更
 			auto cost = cellAutomaton_->GetBuildingCost(types[i]);
 			ImGui::TextColored(typeColors[static_cast<int>(types[i])], "%d:%-12s $%.0f", i + 1, typeNames[static_cast<int>(types[i])], cost.buildCost);
 		}
@@ -272,9 +269,9 @@ void GameScene::UpdateUI() {
 		ImGui::Text("Cursor: (%d, %d)", cx, cz);
 
 		if (cell->levelTimer > 0) {
-			ImGui::TextColored(ImVec4(0, 1, 0, 1), "Upgrading: %d / 5", cell->levelTimer);
+			ImGui::TextColored(ImVec4(0, 1, 0, 1), "Upgrading: %d / 3", cell->levelTimer);
 		} else if (cell->levelTimer < 0) {
-			ImGui::TextColored(ImVec4(1, 0, 0, 1), "Decaying: %d / -5", cell->levelTimer);
+			ImGui::TextColored(ImVec4(1, 0, 0, 1), "Decaying: %d / -3", cell->levelTimer);
 		}
 
 		if (cell && cell->type != CellType::EMPTY) {
@@ -326,7 +323,7 @@ void GameScene::UpdateUI() {
 
 	// ⑥ Developer Tweaks (右下)
 	ImGui::SetNextWindowPos(ImVec2(970, 520), ImGuiCond_FirstUseEver);
-	ImGui::SetNextWindowSize(ImVec2(300, 250), ImGuiCond_FirstUseEver); // 少し縦幅を広げました
+	ImGui::SetNextWindowSize(ImVec2(300, 250), ImGuiCond_FirstUseEver);
 	ImGui::Begin("Developer Tweaks");
 
 	if (ImGui::CollapsingHeader("Building Costs")) {
@@ -334,7 +331,7 @@ void GameScene::UpdateUI() {
 		ImGui::SliderFloat("House Cost", &params_.costResidential, 0.0f, 2000.0f);
 		ImGui::SliderFloat("Commercial Cost", &params_.costCommercial, 0.0f, 2000.0f);
 		ImGui::SliderFloat("Industrial Cost", &params_.costIndustrial, 0.0f, 2000.0f);
-		ImGui::SliderFloat("Park Cost", &params_.costPark, 0.0f, 1000.0f);
+		// Park Cost スライダーを削除
 	}
 
 	if (ImGui::CollapsingHeader("Maintenance & Sim")) {

@@ -1,12 +1,11 @@
 {
-    "ageDecay": 0.10000000149011612,
-    "ageGrace": 20,
-    "ageMinEff": 0.20000000298023224,
-    "costCommercial": 500.0,
-    "costIndustrial": 400.0,
-    "costPark": 200.0,
-    "costResidential": 300.0,
-    "costRoad": 100.7750015258789,
-    "maintCommercial": 4.0,
-    "maintIndustrial": 2.0
+  "ageDecay": 0.10000000149011612,
+  "ageGrace": 20,
+  "ageMinEff": 0.20000000298023224,
+  "costCommercial": 500.0,
+  "costIndustrial": 400.0,
+  "costResidential": 300.0,
+  "costRoad": 100.0,
+  "maintCommercial": 4.0,
+  "maintIndustrial": 2.0
 }

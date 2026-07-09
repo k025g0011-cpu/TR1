@@ -39,7 +39,6 @@ void CellAutomaton::Initialize(Model* model, Camera* camera, const GameParameter
 	textureHandles_[CellType::RESIDENTIAL] = TextureManager::Load("gide1x1.png");
 	textureHandles_[CellType::COMMERCIAL] = TextureManager::Load("blue1x1.png");
 	textureHandles_[CellType::INDUSTRIAL] = TextureManager::Load("black1x1.png");
-	textureHandles_[CellType::PARK] = TextureManager::Load("green1x1.png");
 
 	heatStrongBad_ = TextureManager::Load("darkRed1x1.png");
 	heatBad_ = TextureManager::Load("red1x1.png");
@@ -64,8 +63,6 @@ BuildingCost CellAutomaton::GetBuildingCost(CellType type) const {
 		return {params_->costCommercial, params_->maintCommercial};
 	case CellType::INDUSTRIAL:
 		return {params_->costIndustrial, params_->maintIndustrial};
-	case CellType::PARK:
-		return {params_->costPark, 0.0f};
 	default:
 		return {0.0f, 0.0f};
 	}
@@ -129,7 +126,6 @@ void CellAutomaton::UpdateSatisfaction(int x, int z) {
 
 	float s = 50.0f;
 	s += IsAdjacentToRoad(x, z) ? 20.0f : -50.0f;
-	s += CountNearbyType(x, z, CellType::PARK, 2) * 15.0f;
 	s += CountNearbyType(x, z, CellType::COMMERCIAL, 3) * 15.0f;
 	s -= CountNearbyType(x, z, CellType::INDUSTRIAL, 3) * 30.0f;
 
@@ -200,51 +196,64 @@ void CellAutomaton::SimulateIndustrial(int x, int z) {
 }
 
 void CellAutomaton::UpdateBuildingLevels() {
-	/*
 	for (int x = 0; x < GRID_SIZE; ++x) {
 		for (int z = 0; z < GRID_SIZE; ++z) {
 			Cell& cell = grid_[x][z];
-			if (cell.type == CellType::EMPTY || cell.type == CellType::ROAD || cell.type == CellType::PARK) {
+
+			// 道路・空き地は対象外
+			if (cell.type == CellType::EMPTY || cell.type == CellType::ROAD) {
 				cell.levelTimer = 0;
 				continue;
 			}
 
 			bool isGood = false, isBad = false;
+
+			// ==========================================
+			// 発表用：4要素に絞った明確なレベルアップ条件
+			// ==========================================
 			if (cell.type == CellType::RESIDENTIAL) {
+				// ① 住宅：近くに商業がある（満足度75以上）と育ち、工業がある（30未満）と衰退する
 				if (cell.satisfaction >= 75.0f)
 					isGood = true;
 				else if (cell.satisfaction < 30.0f)
 					isBad = true;
 			} else if (cell.type == CellType::COMMERCIAL) {
-				float capacity = 200.0f * (cell.level + 1) * (1.0f + std::min(1.5f, CountNearbyType(x, z, CellType::INDUSTRIAL, 4) * 0.5f));
+				// ② 商業：客（人口）がキャパの80%以上来ると育ち、20%未満だと衰退する
+				float capacity = 200.0f * (cell.level + 1);
 				if (cell.population >= capacity * 0.8f)
 					isGood = true;
 				else if (cell.population < capacity * 0.2f)
 					isBad = true;
 			} else if (cell.type == CellType::INDUSTRIAL) {
-				if (IsAdjacentToRoad(x, z) && AgeEfficiency(cell.age) >= 0.8f)
+				// ③ 工業：新しくて効率が良い（80%以上）と育ち、老朽化（50%未満）すると衰退する
+				if (AgeEfficiency(cell.age) >= 0.8f)
 					isGood = true;
-				else if (!IsAdjacentToRoad(x, z))
+				else if (AgeEfficiency(cell.age) < 0.5f)
 					isBad = true;
 			}
 
+			// ==========================================
+			// タイマー更新（すべて「3ターン連続」で統一）
+			// ==========================================
 			if (isGood) {
-				if (++cell.levelTimer >= 5) {
+				if (++cell.levelTimer >= 3) {
 					if (cell.level < 2) {
 						cell.level++;
 						cell.levelTimer = 0;
 						if (cell.type == CellType::RESIDENTIAL)
 							cell.population += 20;
-					} else
-						cell.levelTimer = 5;
+					} else {
+						cell.levelTimer = 3;
+					}
 				}
 			} else if (isBad) {
-				if (--cell.levelTimer <= -5) {
+				if (--cell.levelTimer <= -3) {
 					if (cell.level > 0) {
 						cell.level--;
 						cell.levelTimer = 0;
-					} else
-						cell.levelTimer = -5;
+					} else {
+						cell.levelTimer = -3;
+					}
 				}
 			} else {
 				if (cell.levelTimer > 0)
@@ -254,7 +263,6 @@ void CellAutomaton::UpdateBuildingLevels() {
 			}
 		}
 	}
-	*/
 }
 
 void CellAutomaton::UpdateInfluence(int x, int z) {
@@ -270,12 +278,10 @@ void CellAutomaton::UpdateInfluence(int x, int z) {
 // メインシミュレーションループ
 // =====================================================================
 void CellAutomaton::RunSimulation() {
-	// 前ターンの満足度スナップショット
 	for (int x = 0; x < GRID_SIZE; ++x)
 		for (int z = 0; z < GRID_SIZE; ++z)
 			prevSatisfaction_[x][z] = grid_[x][z].satisfaction;
 
-	// 1. 年齢の加算と満足度更新
 	for (int x = 0; x < GRID_SIZE; ++x) {
 		for (int z = 0; z < GRID_SIZE; ++z) {
 			if (grid_[x][z].type != CellType::EMPTY)
@@ -284,7 +290,6 @@ void CellAutomaton::RunSimulation() {
 		}
 	}
 
-	// 2. 経済活動シミュレーション
 	for (int x = 0; x < GRID_SIZE; ++x) {
 		for (int z = 0; z < GRID_SIZE; ++z) {
 			if (grid_[x][z].type == CellType::RESIDENTIAL)
@@ -296,13 +301,11 @@ void CellAutomaton::RunSimulation() {
 		}
 	}
 
-	// 3. レベルアップ判定と影響度更新
 	UpdateBuildingLevels();
 	for (int x = 0; x < GRID_SIZE; ++x)
 		for (int z = 0; z < GRID_SIZE; ++z)
 			UpdateInfluence(x, z);
 
-	// 4. 財政ログ集計
 	float income = 0.0f, comIncome = 0.0f, indIncome = 0.0f, maintenance = 0.0f;
 	for (int x = 0; x < GRID_SIZE; ++x) {
 		for (int z = 0; z < GRID_SIZE; ++z) {
@@ -488,10 +491,6 @@ void CellAutomaton::DrawNormal() {
 			case CellType::INDUSTRIAL:
 				height = 0.7f + cell.level * 0.5f;
 				scaleXZ = 0.44f;
-				break;
-			case CellType::PARK:
-				height = 0.1f;
-				scaleXZ = 0.48f;
 				break;
 			default:
 				break;

@@ -6,7 +6,6 @@ struct GameParameters {
 	float costResidential = 300.0f;
 	float costCommercial = 500.0f;
 	float costIndustrial = 400.0f;
-	float costPark = 200.0f;
 
 	// ── 維持費 ──
 	float maintCommercial = 4.0f;
